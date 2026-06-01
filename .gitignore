@@ -1,0 +1,5 @@
+# Local-only decision archive — kept out of the published repo
+docs/design/decisions.md
+
+# Third-party / copyrighted reference material — not for redistribution
+docs/reference_papers/

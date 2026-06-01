@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>curryGPU · ISA 与编码</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0f14; --bg-2:#0e141b; --bg-3:#141c26; --bg-4:#1a2430;
+  --line:#23303f; --line-2:#2e3e50;
+  --ink:#e7eef5; --ink-dim:#9fb0c0; --ink-faint:#62748a;
+  --gold:#f4b740; --gold-2:#ffd27a; --gold-soft:rgba(244,183,64,.12);
+  --cyan:#48cbe0; --lime:#9bd84e; --blue:#5e9be6; --pink:#ec6fa6; --red:#ef6f6f;
+  --font-body:"IBM Plex Sans","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+  --font-mono:"IBM Plex Mono","Cascadia Code",ui-monospace,monospace;
+  --font-disp:"Chakra Petch","IBM Plex Sans","Noto Sans SC",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg); color:var(--ink); font-family:var(--font-body);
+  font-size:15.5px; line-height:1.72; -webkit-font-smoothing:antialiased;
+  background-image:
+    radial-gradient(900px 500px at 82% -8%, rgba(244,183,64,.07), transparent 60%),
+    radial-gradient(700px 600px at 0% 100%, rgba(72,203,224,.05), transparent 55%),
+    linear-gradient(transparent 95%, rgba(255,255,255,.02) 95%),
+    linear-gradient(90deg, transparent 95%, rgba(255,255,255,.02) 95%);
+  background-size:auto,auto,28px 28px,28px 28px;
+}
+::selection{background:var(--gold);color:#1a1206}
+a{color:var(--gold-2);text-decoration:none}
+.layout{display:grid;grid-template-columns:264px minmax(0,1fr);max-width:1320px;margin:0 auto}
+
+/* ---------- sidebar ---------- */
+.sidebar{
+  position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;
+  background:linear-gradient(180deg,var(--bg-2),var(--bg));
+  border-right:1px solid var(--line);padding:30px 22px 40px;
+}
+.brand{display:flex;align-items:baseline;gap:9px;margin-bottom:4px}
+.brand .logo{font-family:var(--font-disp);font-weight:700;font-size:26px;letter-spacing:.5px;color:var(--ink)}
+.brand .logo b{color:var(--gold)}
+.brand .v{font-family:var(--font-mono);font-size:11px;color:var(--ink-faint);border:1px solid var(--line-2);padding:1px 6px;border-radius:5px}
+.brand-sub{font-family:var(--font-mono);font-size:11px;color:var(--ink-faint);margin-bottom:18px;letter-spacing:.3px}
+.back{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:11.5px;color:var(--ink-dim);border:1px solid var(--line-2);border-radius:7px;padding:6px 10px;margin-bottom:22px;transition:.18s}
+.back:hover{border-color:var(--gold);color:var(--gold-2)}
+.nav{list-style:none;display:flex;flex-direction:column;gap:1px}
+.nav a{
+  display:flex;align-items:center;gap:11px;color:var(--ink-dim);font-size:13.5px;
+  padding:7px 11px;border-radius:7px;border-left:2px solid transparent;transition:.18s;
+}
+.nav a .ix{font-family:var(--font-mono);font-size:10.5px;color:var(--ink-faint);width:16px}
+.nav a:hover{background:var(--bg-3);color:var(--ink)}
+.nav a.active{background:var(--gold-soft);color:var(--gold-2);border-left-color:var(--gold)}
+.nav a.active .ix{color:var(--gold)}
+.rail-stat{margin-top:26px;padding-top:18px;border-top:1px solid var(--line);font-family:var(--font-mono);font-size:11px;color:var(--ink-faint);line-height:1.9}
+.rail-stat b{color:var(--cyan)}
+
+/* ---------- main ---------- */
+main{padding:0 56px 120px;min-width:0}
+.hero{padding:64px 0 38px;border-bottom:1px solid var(--line)}
+.eyebrow{font-family:var(--font-mono);font-size:12px;letter-spacing:3px;text-transform:uppercase;color:var(--gold);margin-bottom:18px}
+.hero h1{font-family:var(--font-disp);font-weight:700;font-size:54px;line-height:1.04;letter-spacing:-.5px;margin-bottom:18px}
+.hero h1 .accent{color:var(--gold)}
+.lede{font-size:18px;color:var(--ink-dim);max-width:62ch;margin-bottom:26px}
+.lede b{color:var(--ink);font-weight:600}
+.badges{display:flex;flex-wrap:wrap;gap:9px}
+.badge{font-family:var(--font-mono);font-size:11.5px;padding:5px 11px;border-radius:20px;border:1px solid var(--line-2);color:var(--ink-dim);display:inline-flex;gap:7px;align-items:center}
+.badge .dot{width:6px;height:6px;border-radius:50%;background:var(--gold)}
+.badge.cy .dot{background:var(--cyan)} .badge.li .dot{background:var(--lime)} .badge.pk .dot{background:var(--pink)}
+
+section{padding:54px 0;border-bottom:1px solid var(--line);scroll-margin-top:20px}
+.sec-head{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+.sec-no{font-family:var(--font-mono);font-size:13px;color:var(--gold);border:1px solid var(--line-2);background:var(--gold-soft);padding:3px 9px;border-radius:6px}
+h2{font-family:var(--font-disp);font-weight:600;font-size:30px;letter-spacing:-.2px}
+.sec-tag{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--ink-faint)}
+.sec-intro{color:var(--ink-dim);max-width:74ch;margin:14px 0 26px}
+h3{font-family:var(--font-disp);font-weight:600;font-size:18px;margin:30px 0 12px;color:var(--ink)}
+p{margin:11px 0;max-width:78ch}
+strong{color:var(--ink);font-weight:600}
+.hl{color:var(--gold-2);font-weight:600}
+code,kbd{font-family:var(--font-mono);font-size:.88em;background:var(--bg-3);border:1px solid var(--line);padding:1px 6px;border-radius:5px;color:var(--gold-2)}
+
+/* ---------- pills / legend ---------- */
+.legend{display:flex;flex-wrap:wrap;gap:16px;margin:6px 0 20px;font-family:var(--font-mono);font-size:11.5px;color:var(--ink-dim)}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.legend i{width:11px;height:11px;border-radius:3px;display:inline-block}
+.sw-vec{background:var(--gold)} .sw-uni{background:var(--cyan)} .sw-ten{background:var(--lime)} .sw-mem{background:var(--blue)} .sw-ctl{background:var(--pink)}
+
+/* ---------- figure ---------- */
+figure{margin:20px 0 6px;background:var(--bg-2);border:1px solid var(--line);border-radius:14px;padding:24px 22px 14px;overflow:hidden}
+figure svg{display:block;width:100%;height:auto}
+figcaption{font-family:var(--font-mono);font-size:11.5px;color:var(--ink-faint);margin-top:12px;padding-top:11px;border-top:1px solid var(--line);letter-spacing:.2px}
+figcaption b{color:var(--ink-dim);font-weight:500}
+
+/* svg shared */
+.dgm .box{fill:var(--bg-3);stroke:var(--line-2);stroke-width:1.4}
+.dgm .lbl{fill:var(--ink);font:600 13px var(--font-mono)}
+.dgm .sub{fill:var(--ink-dim);font:400 10.5px var(--font-mono)}
+.dgm .tiny{fill:var(--ink-faint);font:400 9.5px var(--font-mono)}
+.dgm .vec{fill:rgba(244,183,64,.13);stroke:var(--gold)} .dgm .t-vec{fill:var(--gold)}
+.dgm .uni{fill:rgba(72,203,224,.13);stroke:var(--cyan)} .dgm .t-uni{fill:var(--cyan)}
+.dgm .ten{fill:rgba(155,216,78,.13);stroke:var(--lime)} .dgm .t-ten{fill:var(--lime)}
+.dgm .mem{fill:rgba(94,155,230,.13);stroke:var(--blue)} .dgm .t-mem{fill:var(--blue)}
+.dgm .ctl{fill:rgba(236,111,166,.13);stroke:var(--pink)} .dgm .t-ctl{fill:var(--pink)}
+.dgm .resv{fill:none;stroke:var(--ink-faint);stroke-width:1.3;stroke-dasharray:4 3}
+.dgm .die{fill:none;stroke:var(--line-2);stroke-width:1.4;stroke-dasharray:5 4}
+.dgm .edge{stroke:var(--ink-faint);stroke-width:1.5;fill:none}
+.dgm .edge-g{stroke:var(--gold);stroke-width:1.6;fill:none;opacity:.8}
+.dgm .edge-c{stroke:var(--cyan);stroke-width:1.6;fill:none;opacity:.85}
+.dgm .edge-l{stroke:var(--lime);stroke-width:1.6;fill:none;opacity:.85}
+
+/* ---------- tables ---------- */
+.tbl{width:100%;border-collapse:collapse;margin:18px 0;font-size:13.5px}
+.tbl th,.tbl td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--line);vertical-align:top}
+.tbl thead th{font-family:var(--font-mono);font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--ink-faint);background:var(--bg-2);border-bottom:1px solid var(--line-2)}
+.tbl tbody tr:hover{background:var(--bg-2)}
+.tbl td b{color:var(--gold-2)}
+.tbl .num{font-family:var(--font-mono);color:var(--cyan);white-space:nowrap}
+.tbl .mono{font-family:var(--font-mono);font-size:12.5px;color:var(--ink-dim)}
+.tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+.tbl-wrap .tbl{margin:0}
+
+/* ---------- callout ---------- */
+.note{border-left:3px solid var(--blue);background:rgba(94,155,230,.07);padding:14px 18px;border-radius:0 10px 10px 0;margin:18px 0;font-size:14px;color:var(--ink-dim)}
+.note b{color:var(--ink)}
+.note .tag{font-family:var(--font-mono);font-size:11px;letter-spacing:.5px;text-transform:uppercase;display:block;margin-bottom:5px;color:var(--blue)}
+
+/* ---------- list ---------- */
+ul.clean{list-style:none;margin:12px 0;display:flex;flex-direction:column;gap:9px}
+ul.clean li{padding-left:22px;position:relative;color:var(--ink-dim);max-width:80ch}
+ul.clean li::before{content:"▹";position:absolute;left:2px;color:var(--gold);font-size:13px}
+ul.clean li b{color:var(--ink)}
+
+/* status chips */
+.chip{font-family:var(--font-mono);font-size:10.5px;padding:2px 8px;border-radius:12px;white-space:nowrap}
+.chip.lock{background:rgba(155,216,78,.13);color:var(--lime);border:1px solid rgba(155,216,78,.3)}
+.chip.todo{background:rgba(236,111,166,.1);color:var(--pink);border:1px solid rgba(236,111,166,.28)}
+.chip.prov{background:var(--gold-soft);color:var(--gold-2);border:1px solid rgba(244,183,64,.3)}
+.chip.resv{background:rgba(98,116,138,.12);color:var(--ink-faint);border:1px solid var(--line-2)}
+
+/* roadmap */
+.road{display:flex;flex-direction:column;gap:2px;margin-top:10px}
+.road .row{display:grid;grid-template-columns:42px 1fr auto;gap:14px;align-items:center;padding:11px 14px;border:1px solid var(--line);border-radius:9px;background:var(--bg-2)}
+.road .row .rn{font-family:var(--font-mono);font-size:12px;color:var(--ink-faint)}
+.road .row .rt{font-weight:600;font-size:14px}
+.road .row .rt small{display:block;font-weight:400;font-size:12px;color:var(--ink-faint)}
+
+footer.foot{padding:40px 0 0;color:var(--ink-faint);font-family:var(--font-mono);font-size:12px;line-height:1.9}
+footer.foot b{color:var(--ink-dim)}
+
+.reveal{opacity:0;transform:translateY(14px);transition:opacity .6s ease,transform .6s ease}
+.reveal.in{opacity:1;transform:none}
+
+@media(max-width:920px){
+  .layout{grid-template-columns:1fr}
+  .sidebar{position:static;height:auto;border-right:none;border-bottom:1px solid var(--line)}
+  .nav{flex-direction:row;flex-wrap:wrap}.rail-stat{display:none}
+  main{padding:0 22px 80px}.hero h1{font-size:38px}
+}
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ================= SIDEBAR ================= -->
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">curry<b>GPU</b></span><span class="v">ISA</span></div>
+    <div class="brand-sub">指令集架构与编码</div>
+    <a class="back" href="index.html">← 设计总览 index.html</a>
+    <nav><ul class="nav">
+      <li><a href="#philosophy"><span class="ix">00</span>设计哲学</a></li>
+      <li><a href="#word"><span class="ix">01</span>指令字与控制段</a></li>
+      <li><a href="#operands"><span class="ix">02</span>寄存器与操作数</a></li>
+      <li><a href="#deps"><span class="ix">03</span>依赖与 scoreboard</a></li>
+      <li><a href="#divergence"><span class="ix">04</span>分歧与重聚</a></li>
+      <li><a href="#tensorflow"><span class="ix">05</span>张量数据流与近存</a></li>
+      <li><a href="#queues"><span class="ix">06</span>资源域</a></li>
+      <li><a href="#compute"><span class="ix">07</span>计算类指令族</a></li>
+      <li><a href="#memory"><span class="ix">08</span>访存类指令族</a></li>
+      <li><a href="#tensor"><span class="ix">09</span>张量与低精度</a></li>
+      <li><a href="#control"><span class="ix">10</span>控制 · 同步 · uniform</a></li>
+      <li><a href="#encoding"><span class="ix">11</span>编码定稿与重定位</a></li>
+      <li><a href="#roadmap"><span class="ix">12</span>后续路线</a></li>
+    </ul></nav>
+    <div class="rail-stat">
+      骨架 · <b>已定稿</b><br>
+      指令字 · <b>128-bit</b> / 21-bit ctrl<br>
+      分歧 · <b>ITS</b>（per-lane PC）<br>
+      指令族 · <b>计算 / 访存 / 张量 / 控制</b><br>
+      载荷 · <b>91-bit</b> 单字够用<br>
+      更新 · 2026-05
+    </div>
+  </aside>
+
+  <!-- ================= MAIN ================= -->
+  <main>
+    <header class="hero reveal">
+      <div class="eyebrow">Instruction Set Architecture · 指令集定稿</div>
+      <h1>curryGPU <span class="accent">ISA</span><br>与编码</h1>
+      <p class="lede">总览文档 §09 的展开。一套 <b>clean-slate</b> 硬件指令集：<b>借 NVIDIA 五层 instruction-class 模型</b>（语义 / 操作数 / 资源 / 依赖调度 / 编码）与 21-bit 控制段语义，<b>opcode 编号与位布局全部自定义</b>。本文覆盖<b>骨架</b>（指令字 / 操作数 / 依赖 / 分歧 / 张量数据流）、<b>完整指令族</b>（计算 / 访存 / 张量低精度 / 控制同步 uniform）与<b>编码定稿</b>。</p>
+      <div class="badges">
+        <span class="badge"><span class="dot"></span>128-bit 定长</span>
+        <span class="badge cy"><span class="dot"></span>借模型 · 定制编码</span>
+        <span class="badge pk"><span class="dot"></span>ITS · per-lane PC</span>
+        <span class="badge li"><span class="dot"></span>脉动阵列 · 张量近存 · TMA</span>
+      </div>
+    </header>
+
+    <!-- 00 PHILOSOPHY -->
+    <section id="philosophy" class="reveal">
+      <div class="sec-head"><span class="sec-no">00</span><h2>设计哲学</h2><span class="sec-tag">borrow-model · custom-encode</span></div>
+      <p class="sec-intro">ISA 不从空白起步：复用一套经 NVIDIA 生产验证的<strong>指令集建模骨架</strong>，把每一层换成 curryGPU 的取值；只有 opcode 编号与位布局是 clean-slate 自有。</p>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>方面</th><th>取自 NV 模型（复用）</th><th>curryGPU 自有（定制）</th></tr></thead>
+        <tbody>
+          <tr><td><b>五层 schema</b></td><td>语义 / 操作数 / 资源域 / 依赖调度 / 编码 的分层抽象</td><td>每层的具体成员与取值</td></tr>
+          <tr><td><b>控制段语义</b></td><td>stall / yield / barrier / wait / reuse 的含义</td><td>字段位置与编码值</td></tr>
+          <tr><td><b>依赖模型</b></td><td>coupled/decoupled · scoreboard · virtual queue</td><td>scoreboard 数、资源域集合、实现边界</td></tr>
+          <tr><td><b>opcode / 位布局</b></td><td>—</td><td><b>全部自定义</b>（clean-slate）</td></tr>
+        </tbody>
+      </table></div>
+      <h3>前向兼容与 PTX 分水岭</h3>
+      <ul class="clean">
+        <li><b>ISA 带版本字段</b>（<code>SM_VERSION</code> 式）：保留能力开关与编码差异的演进位，为未来硬件代际留前向兼容，不锁死编码空间。</li>
+        <li><b>PTX 是分水岭</b>：PTX 以上整条前端复用 NV（<code>cicc/libnvvm → PTX</code>）；PTX 以下是 curryGPU 后端。本文只描述 <code>PTX → curryGPU SASS</code> 的<strong>目标 ISA 契约</strong>。</li>
+        <li>该契约供后端的<strong>编码器 · 反汇编器 · 验证器 · 调度器共享一份事实</strong>，避免按 mnemonic 字符串猜语义。</li>
+      </ul>
+    </section>
+
+    <!-- 01 WORD -->
+    <section id="word" class="reveal">
+      <div class="sec-head"><span class="sec-no">01</span><h2>指令字与控制段</h2><span class="sec-tag">128-bit · static control</span></div>
+      <p class="sec-intro">128-bit 定长，每条指令自带 21-bit 控制段。固定骨架 <strong>37 bit</strong>（控制段 21 + guard 谓词 4 + opcode ≈12），其余 <strong>≈91 bit</strong> 给操作数 / 立即数 / 修饰符。单发射 in-order / warp。</p>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 360" role="img" aria-label="128 位指令字与控制段位布局">
+          <text class="tiny" x="20" y="22">① 整字分区（高位 → 低位）</text>
+          <rect class="box ctl" x="20" y="32" width="150" height="42" rx="6"/><text class="lbl t-ctl" x="95" y="52" text-anchor="middle">控制段</text><text class="tiny" x="95" y="67" text-anchor="middle">[21]</text>
+          <rect class="box" x="174" y="32" width="108" height="42" rx="6"/><text class="lbl" x="228" y="52" text-anchor="middle">opcode</text><text class="tiny" x="228" y="67" text-anchor="middle">≈[12] + modifier</text>
+          <rect class="box ctl" x="286" y="32" width="74" height="42" rx="6"/><text class="lbl t-ctl" x="323" y="52" text-anchor="middle">guard</text><text class="tiny" x="323" y="67" text-anchor="middle">[4]</text>
+          <rect class="box" x="364" y="32" width="376" height="42" rx="6"/><text class="lbl" x="552" y="52" text-anchor="middle">操作数 / 立即数 / 修饰符</text><text class="tiny" x="552" y="67" text-anchor="middle">≈[91]</text>
+
+          <text class="tiny" x="20" y="112">② 控制段展开（编译期静态填写）</text>
+          <path class="edge" d="M20 74 L20 96 M170 74 L170 96" stroke-dasharray="3 3"/>
+          <rect class="box ctl" x="20" y="120" width="118" height="50" rx="6"/><text class="lbl t-ctl" x="79" y="142" text-anchor="middle">stall</text><text class="tiny" x="79" y="159" text-anchor="middle">[4] 0–15 cyc</text>
+          <rect class="box ctl" x="142" y="120" width="58" height="50" rx="6"/><text class="lbl t-ctl" x="171" y="142" text-anchor="middle">yield</text><text class="tiny" x="171" y="159" text-anchor="middle">[1]</text>
+          <rect class="box ctl" x="204" y="120" width="92" height="50" rx="6"/><text class="lbl t-ctl" x="250" y="142" text-anchor="middle">r-bar</text><text class="tiny" x="250" y="159" text-anchor="middle">[3] 读屏障</text>
+          <rect class="box ctl" x="300" y="120" width="92" height="50" rx="6"/><text class="lbl t-ctl" x="346" y="142" text-anchor="middle">w-bar</text><text class="tiny" x="346" y="159" text-anchor="middle">[3] 写屏障</text>
+          <rect class="box ctl" x="396" y="120" width="124" height="50" rx="6"/><text class="lbl t-ctl" x="458" y="142" text-anchor="middle">wait-mask</text><text class="tiny" x="458" y="159" text-anchor="middle">[6] 等待掩码</text>
+          <rect class="box ctl" x="524" y="120" width="116" height="50" rx="6"/><text class="lbl t-ctl" x="582" y="142" text-anchor="middle">reuse</text><text class="tiny" x="582" y="159" text-anchor="middle">[4] 操作数复用</text>
+          <text class="tiny" x="652" y="142">合计 21 bit</text>
+          <text class="tiny" x="652" y="158">每指令携带</text>
+
+          <text class="tiny" x="20" y="210">③ 载荷区两种形态</text>
+          <rect class="box" x="20" y="220" width="350" height="64" rx="8"/>
+          <text class="sub" x="34" y="240">A · 寄存器直列（math / ALU / FMA）</text>
+          <rect class="box vec" x="34" y="248" width="74" height="28" rx="5"/><text class="tiny t-vec" x="71" y="266" text-anchor="middle">Rd [8]</text>
+          <rect class="box vec" x="114" y="248" width="74" height="28" rx="5"/><text class="tiny t-vec" x="151" y="266" text-anchor="middle">Ra [8]</text>
+          <rect class="box vec" x="194" y="248" width="74" height="28" rx="5"/><text class="tiny t-vec" x="231" y="266" text-anchor="middle">Rb [8]</text>
+          <rect class="box vec" x="274" y="248" width="86" height="28" rx="5"/><text class="tiny t-vec" x="317" y="266" text-anchor="middle">Rc [8] / imm</text>
+
+          <rect class="box" x="384" y="220" width="356" height="64" rx="8"/>
+          <text class="sub" x="398" y="240">B · descriptor 间接（张量 / 异步 / 常量）</text>
+          <rect class="box ten" x="398" y="248" width="92" height="28" rx="5"/><text class="tiny t-ten" x="444" y="266" text-anchor="middle">Rd / TMEM</text>
+          <rect class="box uni" x="496" y="248" width="104" height="28" rx="5"/><text class="tiny t-uni" x="548" y="266" text-anchor="middle">desc (UR)</text>
+          <rect class="box mem" x="606" y="248" width="120" height="28" rx="5"/><text class="tiny t-mem" x="666" y="266" text-anchor="middle">c[bank][off] / imm</text>
+
+          <text class="tiny" x="20" y="312">固定短延迟靠 stall 隐藏 · 可变长延迟靠 scoreboard（见 §03）· reuse 命中省一次 RF 读</text>
+          <text class="tiny" x="20" y="332">物理 scoreboard 6 个（wait-mask[6] 对齐）· 屏障编号 3-bit 可寻址 8，留余量</text>
+        </svg>
+        <figcaption><b>图 1</b> · 128-bit 指令字与 21-bit 控制段位布局（数据手册式）。位宽为编码预算，参照 NV Volta–Hopper 逆向 + 本地编译器 schema；精确位偏移在编码定稿阶段确定。</figcaption>
+      </figure>
+
+      <div class="note"><span class="tag">控制段 = 统一的软件依赖机制</span>21-bit 控制段是<b>一套</b>软件可见依赖管理，覆盖固定与可变两类延迟：<b>固定延迟</b>（math，如 FFMA）由 <code>stall</code> 静态隐藏；<b>可变延迟</b>（内存 / SFU / 张量）由 <code>SB 位</code>（生产者 issue 时增、写回或读源后减）+ <code>wait-mask</code> 表达——<b>同样是控制位编码，并非另一套机制</b>。详见 §03。</div>
+    </section>
+
+    <!-- 02 OPERANDS -->
+    <section id="operands" class="reveal">
+      <div class="sec-head"><span class="sec-no">02</span><h2>寄存器与操作数</h2><span class="sec-tag">files · address spaces · operand types</span></div>
+      <p class="sec-intro">向量与标量两套寄存器文件，6 个地址空间，operand 类型按机器语义分类——编码上是<strong>类型</strong>而非 mnemonic 后缀，验证器 / 调度器 / 反汇编器据此判断合法性与依赖。</p>
+
+      <h3>寄存器文件</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>文件</th><th>编码域</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><b>GPR</b> 通用寄存器</td><td class="num">8-bit</td><td>255 可寻址 + <code>RZ</code> 恒零；物理容量留到 uarch 定（编码域不花额外位）</td></tr>
+          <tr><td><b>URF</b> uniform 寄存器</td><td class="num">独立域</td><td>warp 内标量 / 地址 / descriptor 载体；独立于 GPR 的 operand path</td></tr>
+          <tr><td><b>P</b> 谓词</td><td class="num">3-bit</td><td>可寻址 8：7 个通用 + <code>PT</code> 恒真</td></tr>
+          <tr><td><b>UP</b> uniform 谓词</td><td class="num">3-bit</td><td>同构于 P，独立资源文件</td></tr>
+          <tr><td><b>SR</b> 特殊寄存器</td><td class="mono">—</td><td><code>%tid / %ctaid / %clock / %cluster_ctarank</code> 等，只读机器状态</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>地址空间（6 类，从近到远）</h3>
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 120" role="img" aria-label="六个地址空间层次">
+          <rect class="box vec" x="14" y="34" width="104" height="52" rx="7"/><text class="lbl t-vec" x="66" y="58" text-anchor="middle">register</text><text class="tiny" x="66" y="74" text-anchor="middle">0–1 cyc</text>
+          <rect class="box ten" x="128" y="34" width="118" height="52" rx="7"/><text class="lbl t-ten" x="187" y="58" text-anchor="middle">tensor-mem</text><text class="tiny" x="187" y="74" text-anchor="middle">张量近存 · 新增</text>
+          <rect class="box mem" x="256" y="34" width="118" height="52" rx="7"/><text class="lbl t-mem" x="315" y="58" text-anchor="middle">shared / L1</text><text class="tiny" x="315" y="74" text-anchor="middle">CTA 可见</text>
+          <rect class="box mem" x="384" y="34" width="104" height="52" rx="7"/><text class="lbl t-mem" x="436" y="58" text-anchor="middle">const</text><text class="tiny" x="436" y="74" text-anchor="middle">c[bank][off]</text>
+          <rect class="box mem" x="498" y="34" width="104" height="52" rx="7"/><text class="lbl t-mem" x="550" y="58" text-anchor="middle">local</text><text class="tiny" x="550" y="74" text-anchor="middle">per-thread spill</text>
+          <rect class="box mem" x="612" y="34" width="134" height="52" rx="7"/><text class="lbl t-mem" x="679" y="58" text-anchor="middle">global</text><text class="tiny" x="679" y="74" text-anchor="middle">LPDDR5 · 长延迟</text>
+          <text class="tiny" x="14" y="24">近 ◀──────────────────────────────────────────────────────────────▶ 远</text>
+        </svg>
+        <figcaption><b>图 2</b> · 地址空间集 = <code>{register, tensor-mem, shared/L1, const, local, global}</code>。<b>tensor-mem 为新增空间</b>（脉动阵列的张量近存，见 §05）；cluster 启用后 shared 扩展为<b>分布式 shared（DSMEM）</b>，可寻址同 cluster 内其他 CTA 的 shared（见 §10）。</figcaption>
+      </figure>
+
+      <h3>operand 类型</h3>
+      <p>编码区分以下类别；<code>descriptor</code> 与 <code>TMEM-addr</code> 是张量/异步路径的关键——fragment 装不进直接寄存器列举时，用驻留在 UR 的 <strong>small-object descriptor</strong> 间接描述来源与 layout：</p>
+      <ul class="clean">
+        <li><b>GPR / UR</b>：普通与 uniform 寄存器（两条独立 operand path，不可混为一谈）。</li>
+        <li><b>P / UP</b>：谓词与 uniform 谓词（guard 与指令内部谓词）。</li>
+        <li><b>SR</b>：特殊寄存器（只读机器状态）。</li>
+        <li><b>const</b>：<code>c[bank][offset]</code> 常量操作数——kernel 参数 / 常量直接入指令，省 RF 与发射。</li>
+        <li><b>descriptor</b>：TMA descriptor（global tensor 形状/stride/tile/swizzle）、memory descriptor；驻 UR，要求 warp 内 uniform。</li>
+        <li><b>TMEM-addr</b>：指向张量近存内部某段累加器 / fragment，不进入 GPR 分配（行 / 段 / lane 位布局见 §11）。</li>
+        <li><b>shared.remote / DSMEM</b>：cluster 内远程 CTA 的 shared 地址 = <code>%cluster_ctarank</code>（远程 CTA selector）+ shared offset；<code>LDS / STS / ATOMS / RED</code> 与 TMA <code>.MCAST</code>、mbarrier <code>.CLUSTER</code> 据此寻址，对齐 / 越界 / 权限规则随 shared——非新增地址空间，是 shared 的 cluster 形态（见 §10）。</li>
+      </ul>
+    </section>
+
+    <!-- 03 DEPS -->
+    <section id="deps" class="reveal">
+      <div class="sec-head"><span class="sec-no">03</span><h2>依赖与 scoreboard</h2><span class="sec-tag">software-managed dependency</span></div>
+      <p class="sec-intro">依赖跟踪交给软件：硬件不做寄存器重命名 / 动态记分牌 / ROB，省下的逻辑让位给执行单元与寄存器堆。21-bit 控制段是<strong>一套统一的软件可见依赖机制</strong>，<strong>同时</strong>覆盖固定与可变两类延迟——可变延迟由控制位中的 SB 位 + wait-mask 表达，并非另一套机制。</p>
+
+      <h3>两类延迟，同一套控制位</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>延迟性质 · 管线</th><th>对象</th><th>控制位如何处理</th></tr></thead>
+        <tbody>
+          <tr><td><b>固定延迟</b> · coupled</td><td>math / ALU / FMA</td><td><code>stall</code> counter 静态隐藏（= 生产者延迟 − 间隔指令数）+ reuse；不分配 SB</td></tr>
+          <tr><td><b>可变延迟</b> · decoupled</td><td>内存 / SFU / 异步 copy / TMA / 张量</td><td><code>SB 位</code>（issue 增 / 写回·读源后减）+ <code>wait-mask</code>；可用 <code>DEPBAR.LE</code> 显式等待</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>可变延迟：SB 位 + wait-mask（控制位的一部分）</h3>
+      <p>编译器不知道内存 / SFU / 张量指令的执行时间，无法用 stall——这类依赖<strong>完全由控制位表达</strong>。<strong>6 个 Dependence counter</strong>（<code>SBx</code>，x∈[0,5]，各计到 63）：</p>
+      <ul class="clean">
+        <li><code>dst_wr_sb</code>（<code>&amp;WR</code>，3-bit）：生产者 issue 时 +1、<b>写回时 −1</b>，跟踪 RAW / WAW。</li>
+        <li><code>src_rel_sb</code>（<code>&amp;RD</code>，3-bit）：读屏障——保护源操作数被本指令读完前不被后续写者覆盖（WAR）。issue 时 +1、<b>源读取完成即 −1</b>（生命周期是 source-read，非 writeback），比等写回早释放（内存指令可省数百 cycle）。</li>
+        <li><code>wait-mask</code>（<code>&amp;REQ</code>，6-bit）：consumer 发射前要等哪些 SB 归零，最多可同时等全部 6 个。</li>
+      </ul>
+      <p>两种等待原语：<code>wait-mask</code> 等选中 SB <b>归零（EQ-0）</b>；<code>DEPBAR.LE SBx, N</code> 对单个 SB 等到<b>剩 ≤N 个未完成</b>——in-flight 组的阈值等待，用于异步 copy / TMA 组（6 SBx 范围内）；MMA group scoreboard 独立于 6 SBx，由专用 <code>MMA.WAIT / MMA.DEPBAR.LE</code> 等待（见 §09）。SB 自增有 <b>1 拍可见延迟</b>——紧邻 consumer 由 <code>stall≥2</code> 或 <code>yield</code> 兜底。编译器流程：<code>def-use → 虚拟 SB web → 剪枝 → 物理 SB 染色（6 个）→ 写 &amp;WR/&amp;RD + wait-mask</code>；6 个 SB 在张量供数 + 多笔异步 copy in-flight 时提供并发度。</p>
+      <div class="note"><span class="tag">能效依据 · 实测</span>控制位逻辑面积仅占寄存器堆的 <span class="hl">0.09–0.13%</span>，等效硬件记分牌需 <span class="hl">5.32–7.09%</span>，且静态调度性能更优。<span style="color:var(--ink-faint)">源：arXiv:2503.20481 / 1804.06826，适用于该两篇的测试配置。</span></div>
+
+      <h3>内存一致性</h3>
+      <p><strong>弱内存序 + scoped fence</strong>：默认 <code>.WEAK</code>，需要时 <code>.STRONG</code> 按 scope 生效；scope 阶梯 <code>CTA / cluster / GPU / SYS</code>（cluster 随 §10 thread-block cluster 启用）。<strong>执行依赖与内存可见性分离</strong>：<code>SB</code> / <code>wait</code> 只约束指令<strong>发射 / 完成</strong>（数据就绪），<strong>不</strong>等同内存排序；跨 generic / async-proxy 的可见性由 <code>fence</code>（含 <code>FENCE.PROXY.ASYNC</code>）、<code>sem.scope</code>、mbarrier 的 release / acquire 决定——mbarrier <code>complete_tx</code> 本身不自动传递排序。</p>
+    </section>
+
+    <!-- 04 DIVERGENCE -->
+    <section id="divergence" class="reveal">
+      <div class="sec-head"><span class="sec-no">04</span><h2>分歧与重聚</h2><span class="sec-tag">independent thread scheduling</span></div>
+      <p class="sec-intro">warp 内分支采用<strong>独立线程调度（ITS）</strong>：每 lane 独立 PC，收敛屏障管理分歧与重聚，支持 starvation-free 前进与细粒度同步。</p>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>项</th><th>取值</th></tr></thead>
+        <tbody>
+          <tr><td><b>分歧 / 重聚</b></td><td>收敛屏障指令（<code>BSSY / BSYNC / BRA.DIV</code> 式）</td></tr>
+          <tr><td><b>per-lane PC</b></td><td>每 warp 32 个独立 PC + active mask</td></tr>
+          <tr><td><b>前进保证</b></td><td>starvation-free，规避经典 SIMT 死锁</td></tr>
+          <tr><td><b>warp 宽度</b></td><td>32 lane（与 NV 前端 / 张量 fragment 绑定）</td></tr>
+        </tbody>
+      </table></div>
+      <p>warp = 32 由前端复用与张量 fragment 布局决定（<code>shfl / vote / match</code>、MMA fragment 的 lane 映射、<code>bar.warp.sync</code> 均依赖 32）。高分歧小 kernel 的 lane 利用率由 subwarp 发射在 uarch 层优化，不改 ISA warp 语义。</p>
+    </section>
+
+    <!-- 05 TENSOR FLOW -->
+    <section id="tensorflow" class="reveal">
+      <div class="sec-head"><span class="sec-no">05</span><h2>张量数据流与近存</h2><span class="sec-tag">systolic · tensor-mem · TMA</span></div>
+      <p class="sec-intro">TPU 系数据流：<strong>TMA</strong> 在 <code>global ↔ shared</code> 间异步搬运多维 tile；脉动阵列从 shared 取输入、在 PE 内累加（output-stationary）；累加器与输出 drain 到专用<strong>张量近存</strong>，离开寄存器堆。</p>
+      <div class="legend">
+        <span><i class="sw-ten"></i>脉动阵列 / 张量近存</span><span><i class="sw-uni"></i>TMA · uniform engine</span>
+        <span><i class="sw-mem"></i>通用存储</span><span><i class="sw-ctl"></i>完成同步</span>
+      </div>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="脉动阵列 + 张量近存 + TMA 数据流">
+          <!-- global -->
+          <rect class="box mem" x="16" y="112" width="90" height="54" rx="8"/><text class="lbl t-mem" x="61" y="136" text-anchor="middle">global</text><text class="tiny" x="61" y="153" text-anchor="middle">LPDDR5</text>
+          <!-- TMA engine -->
+          <rect class="box uni" x="134" y="106" width="104" height="66" rx="8"/><text class="lbl t-uni" x="186" y="132" text-anchor="middle">TMA 引擎</text><text class="tiny" x="186" y="148" text-anchor="middle">uniform engine</text><text class="tiny" x="186" y="162" text-anchor="middle">发起占 1 issue</text>
+          <!-- shared -->
+          <rect class="box mem" x="266" y="112" width="120" height="54" rx="8"/><text class="lbl t-mem" x="326" y="134" text-anchor="middle">shared / L1</text><text class="tiny" x="326" y="151" text-anchor="middle">输入源 · SIMT 共用</text>
+          <!-- TMA links global<->shared -->
+          <path class="edge-c" d="M106 139 H134"/><path class="edge-c" d="M238 139 H266"/>
+          <text class="tiny t-uni" x="186" y="98" text-anchor="middle">global ↔ shared（load / store）</text>
+          <!-- systolic array -->
+          <rect class="box ten" x="414" y="70" width="128" height="128" rx="8"/>
+          <text class="lbl t-ten" x="478" y="90" text-anchor="middle">脉动阵列</text>
+          <g>
+            <rect class="box ten" x="430" y="104" width="22" height="22" rx="3"/><rect class="box ten" x="456" y="104" width="22" height="22" rx="3"/><rect class="box ten" x="482" y="104" width="22" height="22" rx="3"/><rect class="box ten" x="508" y="104" width="22" height="22" rx="3"/>
+            <rect class="box ten" x="430" y="130" width="22" height="22" rx="3"/><rect class="box ten" x="456" y="130" width="22" height="22" rx="3"/><rect class="box ten" x="482" y="130" width="22" height="22" rx="3"/><rect class="box ten" x="508" y="130" width="22" height="22" rx="3"/>
+            <rect class="box ten" x="430" y="156" width="22" height="22" rx="3"/><rect class="box ten" x="456" y="156" width="22" height="22" rx="3"/><rect class="box ten" x="482" y="156" width="22" height="22" rx="3"/><rect class="box ten" x="508" y="156" width="22" height="22" rx="3"/>
+          </g>
+          <text class="tiny t-ten" x="478" y="192" text-anchor="middle">PE 内累加 · DSP-free</text>
+          <!-- shared -> array -->
+          <path class="edge" d="M386 139 H414" marker-end="url(#ah)"/><text class="tiny t-mem" x="400" y="131" text-anchor="middle">load</text>
+          <!-- tensor-mem -->
+          <rect class="box ten" x="572" y="100" width="158" height="60" rx="8"/><text class="lbl t-ten" x="651" y="124" text-anchor="middle">张量近存</text><text class="tiny" x="651" y="141" text-anchor="middle">累加器 · 输出 drain</text><text class="tiny" x="651" y="154" text-anchor="middle">离开 RF</text>
+          <!-- array -> tensor-mem -->
+          <path class="edge-l" d="M542 130 H572" marker-end="url(#ahl)"/><text class="tiny t-ten" x="557" y="122" text-anchor="middle">drain</text>
+          <!-- writeback -->
+          <path class="edge" d="M651 160 V214 H326 V168" marker-end="url(#ah)" stroke-dasharray="4 3"/><text class="tiny" x="486" y="230" text-anchor="middle">写回 → shared →（TMA store）→ global</text>
+          <!-- mbarrier -->
+          <rect class="box ctl" x="134" y="210" width="104" height="40" rx="8"/><text class="lbl t-ctl" x="186" y="231" text-anchor="middle">mbarrier</text><text class="tiny" x="186" y="245" text-anchor="middle">完成通知</text>
+          <path class="edge" d="M186 172 V210" stroke-dasharray="3 3"/>
+          <defs>
+            <marker id="ah" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--ink-faint)"/></marker>
+            <marker id="ahl" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--lime)"/></marker>
+          </defs>
+        </svg>
+        <figcaption><b>图 3</b> · 数据流：<code>global ↔ shared</code> 由 TMA 异步搬运；脉动阵列从 shared 取输入、PE 内累加；累加器与输出 drain 到张量近存；mbarrier 通知完成。</figcaption>
+      </figure>
+
+      <h3>TMA（Tensor Memory Accelerator 式）</h3>
+      <p>在 <strong>global ↔ shared</strong> 间搬运多维 tile（含 stride / swizzle / 越界策略）。走 <strong>uniform engine</strong>：发起指令占一次 issue，数据搬运与地址迭代不持续占 warp 发射槽；不经 RF staging；一条指令替代大量地址生成。完成：load 经 mbarrier <code>complete_tx</code>，store / reduce 经 bulk-group commit/wait + BULK-SB（见 §08）。</p>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>能力</th><th>形态</th></tr></thead>
+        <tbody>
+          <tr><td>tile 维度</td><td><b>2D–5D tile</b>（<code>UTMALDG / UTMASTG</code> 式）</td></tr>
+          <tr><td>布局选项</td><td>stride + swizzle · 尾部 mask / ignore_oob · im2col</td></tr>
+          <tr><td>方向</td><td>load / store / reduce（<code>UTMAREDG</code> · redOp×type×scope）</td></tr>
+          <tr><td>multicast</td><td><code>.MCAST</code>（随 cluster · §10）</td></tr>
+          <tr><td>完成 / 同步</td><td>load→mbarrier complete_tx · store / reduce→bulk-group</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>张量近存（tensor-mem）</h3>
+      <p>独立地址空间，<code>LDT / STT</code> 式专用访问（走 <strong>AGU 资源域</strong>、占物理 SBx，与 <code>LDS/STS</code> 平行，不新增资源域）+ <code>TMEM-addr</code> 操作数类。承载脉动阵列的<strong>累加器与输出 drain</strong>，让中间结果离开 RF、支持大 tile 累加；权重 / 累加初值经 <code>shared → tensor-mem</code> 直拷预载，不走 RF 回程。规模按阵列尺寸与 tile 在 uarch 阶段定，指令面见 §09。</p>
+    </section>
+
+    <!-- 06 QUEUES -->
+    <section id="queues" class="reveal">
+      <div class="sec-head"><span class="sec-no">06</span><h2>资源域</h2><span class="sec-tag">virtual queue · 硬件通路</span></div>
+      <p class="sec-intro">virtual queue（资源域）决定指令在哪条硬件通路执行，影响 pairing、scoreboard 剪枝与 depbar 候选。<strong>枚举全定义</strong>，RTL 实现全部功能域，仅架构不采用的 UMMA / texture / surface 留位。</p>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>资源域</th><th>承载</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td><b>math</b></td><td>coupled ALU / FMA</td><td><span class="chip lock">实现</span></td></tr>
+          <tr><td><b>AGU</b></td><td>LD / ST / ATOM · CPY · LDT/STT（LSU + 张量近存访问）</td><td><span class="chip lock">实现</span></td></tr>
+          <tr><td><b>MMA</b></td><td>脉动阵列矩阵乘加</td><td><span class="chip lock">实现</span></td></tr>
+          <tr><td><b>TMA</b></td><td>多维 tile 异步搬运（uniform engine · 2D–5D · im2col · reduce · mcast）</td><td><span class="chip lock">实现</span></td></tr>
+          <tr><td><b>CBU</b></td><td>分支 / barrier / yield / nanosleep</td><td><span class="chip lock">实现</span></td></tr>
+          <tr><td><b>fence</b></td><td>ordering / 可见性</td><td><span class="chip lock">实现</span></td></tr>
+          <tr><td><b>SFU</b></td><td>超越函数 MUFU（decoupled · 写 SB）</td><td><span class="chip lock">实现</span></td></tr>
+          <tr><td><b>XLANE</b></td><td>cross-lane 协作 SHFL/VOTE/REDUX/MATCH（decoupled · 写 SB）</td><td><span class="chip lock">实现</span></td></tr>
+          <tr><td>UMMA</td><td>NV warpgroup async MMA</td><td><span class="chip resv">留位</span></td></tr>
+          <tr><td>texture / surface</td><td>采样 / 表面读写</td><td><span class="chip resv">留位</span></td></tr>
+        </tbody>
+      </table></div>
+      <p style="color:var(--ink-faint);font-size:13px">「留位」= 保留编码与 schema 枚举值、不实现硬件（架构暂不采用，便于日后平滑加入）。</p>
+    </section>
+
+    <!-- 07 COMPUTE -->
+    <section id="compute" class="reveal">
+      <div class="sec-head"><span class="sec-no">07</span><h2>计算类指令族</h2><span class="sec-tag">int · fp · cvt · sfu · pred</span></div>
+      <p class="sec-intro">少而正交的<strong>工作母机</strong>（IADD3 / IMAD / LOP3 / SHF / ISETP）+ modifier / LUT 合成覆盖整数·浮点·位运算，opcode 不爆。全族归 <strong>math / coupled</strong>（latency table + stall 静态隐藏、通常不分配 scoreboard）；<strong>SFU 超越函数</strong>为 decoupled 例外（独立资源域、写 scoreboard）——同属 decoupled 的还有 cross-lane 归约（§10），不止 SFU 一处。</p>
+      <div class="legend">
+        <span><i class="sw-vec"></i>math · coupled</span><span><i class="sw-ctl"></i>SFU · decoupled</span><span><i class="sw-ten"></i>低精度路径</span>
+      </div>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 240" role="img" aria-label="计算类分族与资源域">
+          <rect class="box" x="18" y="44" width="556" height="176" rx="10"/>
+          <text class="sub" x="32" y="64">math 域 · coupled · latency table + stall 隐藏 · 无 scoreboard</text>
+          <rect class="box vec" x="34" y="78" width="128" height="128" rx="8"/><text class="lbl t-vec" x="98" y="100" text-anchor="middle">INT-ALU</text><text class="tiny" x="98" y="120" text-anchor="middle">IADD3 · IMAD</text><text class="tiny" x="98" y="134" text-anchor="middle">LOP3 · SHF</text><text class="tiny" x="98" y="148" text-anchor="middle">ISETP · IMNMX</text><text class="tiny" x="98" y="162" text-anchor="middle">IDP4A · POPC</text><text class="tiny" x="98" y="176" text-anchor="middle">FLO/BREV/PRMT</text>
+          <rect class="box vec" x="170" y="78" width="128" height="128" rx="8"/><text class="lbl t-vec" x="234" y="100" text-anchor="middle">FP-ALU</text><text class="tiny" x="234" y="120" text-anchor="middle">FADD · FMUL</text><text class="tiny" x="234" y="134" text-anchor="middle">FFMA(混合精度)</text><text class="tiny" x="234" y="148" text-anchor="middle">FSETP · FMNMX</text><text class="tiny" x="234" y="162" text-anchor="middle">FSEL · HFMA2</text><text class="tiny" x="234" y="176" text-anchor="middle">[FP64 最小集]</text>
+          <rect class="box vec" x="306" y="78" width="128" height="128" rx="8"/><text class="lbl t-vec" x="370" y="100" text-anchor="middle">CVT</text><text class="tiny" x="370" y="120" text-anchor="middle">I2F · F2I</text><text class="tiny" x="370" y="134" text-anchor="middle">F2F · I2I · FRND</text><text class="tiny t-ten" x="370" y="150" text-anchor="middle">F2FP · I2IP</text><text class="tiny t-ten" x="370" y="164" text-anchor="middle">F2FP.RS</text><text class="tiny t-ten" x="370" y="178" text-anchor="middle">F2SF(缩放因子)</text>
+          <rect class="box vec" x="442" y="78" width="124" height="128" rx="8"/><text class="lbl t-vec" x="504" y="100" text-anchor="middle">PRED-IMM</text><text class="tiny" x="504" y="120" text-anchor="middle">ISETP/FSETP</text><text class="tiny" x="504" y="134" text-anchor="middle">PLOP3</text><text class="tiny" x="504" y="150" text-anchor="middle">guard @P</text><text class="tiny" x="504" y="164" text-anchor="middle">imm32 / c[][]</text><text class="tiny" x="504" y="178" text-anchor="middle">reuse[4]</text>
+          <rect class="box ctl" x="592" y="44" width="150" height="176" rx="10"/>
+          <text class="lbl t-ctl" x="667" y="70" text-anchor="middle">SFU 域</text>
+          <text class="tiny" x="667" y="88" text-anchor="middle">decoupled</text><text class="tiny" x="667" y="102" text-anchor="middle">写 scoreboard</text>
+          <text class="sub t-ctl" x="667" y="128" text-anchor="middle">MUFU</text>
+          <text class="tiny" x="667" y="146" text-anchor="middle">RCP · RSQ · SQRT</text><text class="tiny" x="667" y="160" text-anchor="middle">EX2 · LG2 · TANH</text><text class="tiny" x="667" y="174" text-anchor="middle">SIN · COS</text>
+          <text class="tiny" x="667" y="196" text-anchor="middle">EX2/TANH f16x2</text>
+        </svg>
+        <figcaption><b>图 4</b> · 计算类顶层分族。INT-ALU / FP-ALU / CVT / PRED-IMM 同属 math/coupled（依赖靠 stall + reuse 静态隐藏）；SFU 自成 decoupled 资源域、写 scoreboard，与前四族形成有意对照（decoupled 不止 SFU——cross-lane 归约亦然，见 §10）。净主 opcode 约 40 个（远小于 12-bit 的 4096），真正紧约束是 ≈91-bit 载荷内的 sub-op + operand + modifier 预算。</figcaption>
+      </figure>
+
+      <h3>指令族总览</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>分族</th><th>代表指令</th><th>资源域</th></tr></thead>
+        <tbody>
+          <tr><td><b>INT-ALU</b> 整数</td><td class="mono">IADD3 · IMAD · LOP3 · SHF · ISETP · IMNMX · IDP4A/IDP2A · BFE/BFI · SAD · POPC/FLO/BREV/PRMT/SGXT/BMSK</td><td>math · coupled</td></tr>
+          <tr><td><b>FP-ALU</b> 浮点</td><td class="mono">FADD · FMUL · FFMA · FSETP · FMNMX · FSEL · TESTP · HADD2/HMUL2/HFMA2</td><td>math · coupled</td></tr>
+          <tr><td><b>CVT</b> 转换/打包</td><td class="mono">I2F · F2I · F2F · I2I · FRND · F2FP · F2FP.RS · I2IP · F2SF</td><td>math · coupled</td></tr>
+          <tr><td><b>SFU</b> 超越</td><td class="mono">MUFU.{RCP,RSQ,SQRT,EX2,LG2,SIN,COS,TANH}</td><td>SFU · decoupled · scoreboard</td></tr>
+          <tr><td><b>PRED-IMM</b> 谓词/立即数</td><td class="mono">ISETP/FSETP(owner) · PLOP3 · guard @P · imm32 / c[bank][off] / reuse</td><td>横切机制</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>低精度计算路径（差异点）</h3>
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 120" role="img" aria-label="低精度量化链">
+          <rect class="box ctl" x="20" y="44" width="150" height="48" rx="8"/><text class="lbl t-ctl" x="95" y="64" text-anchor="middle">amax</text><text class="tiny" x="95" y="80" text-anchor="middle">REDUX.FMAX.ABS</text>
+          <rect class="box ten" x="246" y="44" width="150" height="48" rx="8"/><text class="lbl t-ten" x="321" y="64" text-anchor="middle">F2SF</text><text class="tiny" x="321" y="80" text-anchor="middle">生成 MX/NVFP4 因子</text>
+          <rect class="box ten" x="442" y="44" width="150" height="48" rx="8"/><text class="lbl t-ten" x="517" y="64" text-anchor="middle">F2FP</text><text class="tiny" x="517" y="80" text-anchor="middle">pack FP8/FP6/FP4</text>
+          <rect class="box ten" x="628" y="44" width="112" height="48" rx="8"/><text class="lbl t-ten" x="684" y="64" text-anchor="middle">张量 MMA</text><text class="tiny" x="684" y="80" text-anchor="middle">block-scale</text>
+          <path class="edge" d="M170 68 H246" marker-end="url(#cah)"/><path class="edge-l" d="M396 68 H442" marker-end="url(#cahl)"/><path class="edge-l" d="M592 68 H628" marker-end="url(#cahl)"/>
+          <defs>
+            <marker id="cah" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--ink-faint)"/></marker>
+            <marker id="cahl" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--lime)"/></marker>
+          </defs>
+        </svg>
+        <figcaption><b>图 5</b> · 微缩放量化链：每块 amax → F2SF 生成缩放因子 → F2FP 打包到 FP8/FP6/FP4 → 张量 MMA 按 block-scale 计算。amax 的 cross-lane 归约由 warp 协作族 <code>REDUX.FMAX.ABS</code> 承载（§10），归约窗口与 MMA block-scale 粒度（B16/B32）对齐。</figcaption>
+      </figure>
+      <ul class="clean">
+        <li><b>SIMT 算术下限 F16/BF16</b>：packed <code>HADD2 / HFMA2</code> 等；FP8/FP6/FP4 的乘加只走脉动阵列张量域，不在 SIMT 通路下探。</li>
+        <li><b>pack/cvt 下探到 FP4</b>：<code>F2FP</code>（强制 <code>.SATFINITE</code>）、<code>I2IP</code>（INT8/INT4）、<code>F2FP.RS</code>（随机舍入，显式 random-bits 源）。</li>
+        <li><b>INT 点积 IDP4A / IDP2A</b>：SIMT 通路的 INT8 4-way / INT16 2-way 点积，作小算子 fallback（不值得起脉动阵列时），与张量 MMA 互为 fallback。</li>
+        <li><b>低精度激活</b>：<code>MUFU.EX2 / .TANH</code> 的 f16x2/bf16x2 packed，张量输出就近后处理，免 f32 往返。</li>
+      </ul>
+
+      <h3>关键约定</h3>
+      <ul class="clean">
+        <li><b>正交母机 + 合成</b>：签名 / 宽度 / 方向 / 比较关系全用 modifier；<code>IMUL = IMAD(c=RZ)</code> 别名；不铸 <code>*32I</code> 独立 opcode（32-bit 立即数内嵌为 srcB 形态，每指令至多一个"大"操作数 <code>imm32 ⊕ c[][] ⊕ URb</code>）。</li>
+        <li><b>进位走谓词</b>：<code>IADD3.X / IMAD.X / ISETP.EX</code> 用普通谓词传 carry，不设全局 CC 寄存器。</li>
+        <li><b>谓词面唯一</b>：<code>ISETP / FSETP</code>（双谓词输出 + 布尔组合）权威定义于 PRED-IMM 族，整数 / FP 族只引用 + 各自 dtype 约束；<code>PLOP3</code> 为谓词 LUT。</li>
+        <li><b>SFU 对照</b>：IEEE 级精度由编译器 <code>MUFU 种子 + FMA 牛顿迭代</code> 合成，不设单条 IEEE rcp/sqrt；<code>SQRT</code> 由 <code>RSQ</code> 合成。</li>
+      </ul>
+    </section>
+
+    <!-- 08 MEMORY -->
+    <section id="memory" class="reveal">
+      <div class="sec-head"><span class="sec-no">08</span><h2>访存类指令族</h2><span class="sec-tag">mem · async · TMA · mbarrier</span></div>
+      <p class="sec-intro">访存全归 <strong>decoupled</strong>：地址空间是 operand 类型而非 mnemonic 后缀；三档搬运（同步逐线程 / 异步逐线程 / bulk）与跨 warp 完成同步分工明确，共用 §03 的 SB + wait-mask 机制。</p>
+      <div class="legend">
+        <span><i class="sw-mem"></i>AGU · 同步 / 异步逐线程</span><span><i class="sw-uni"></i>TMA · uniform engine</span><span><i class="sw-ctl"></i>mbarrier · 跨 warp 完成</span>
+      </div>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 270" role="img" aria-label="访存三档通路与完成同步对照">
+          <text class="tiny" x="20" y="22">三档搬运 · 同一套 SB + wait-mask 完成机制（§03）</text>
+          <text class="tiny" x="20" y="50">通路 · 指令</text>
+          <text class="tiny" x="290" y="50">资源域 · 特征</text>
+          <text class="tiny" x="540" y="50">目标 · 完成</text>
+          <line class="die" x1="20" y1="58" x2="740" y2="58"/>
+
+          <rect class="box mem" x="20" y="68" width="240" height="40" rx="6"/><text class="sub t-mem" x="140" y="92" text-anchor="middle">LD/ST · LDG/STG · LDS/STS · ATOM/RED</text>
+          <text class="tiny" x="290" y="84">AGU · 同步 · 经 RF</text><text class="tiny" x="290" y="100">&amp;WR(RAW) / &amp;RD(WAR) · wait-mask EQ-0</text>
+          <rect class="box mem" x="540" y="68" width="200" height="40" rx="6"/><text class="tiny t-mem" x="640" y="84" text-anchor="middle">RF / shared / global</text><text class="tiny" x="640" y="99" text-anchor="middle">通用 SB 池（≤4）</text>
+
+          <rect class="box mem" x="20" y="118" width="240" height="40" rx="6"/><text class="sub t-mem" x="140" y="142" text-anchor="middle">CPY · CPY_COMMIT · CPY_WAIT</text>
+          <text class="tiny" x="290" y="134">AGU · 异步逐 lane · bypass RF</text><text class="tiny" x="290" y="150">commit/wait 组 · 固定 SB_cpy</text>
+          <rect class="box mem" x="540" y="118" width="200" height="40" rx="6"/><text class="tiny t-mem" x="640" y="134" text-anchor="middle">shared</text><text class="tiny" x="640" y="149" text-anchor="middle">DEPBAR.LE SB_cpy, N</text>
+
+          <rect class="box uni" x="20" y="168" width="240" height="40" rx="6"/><text class="sub t-uni" x="140" y="192" text-anchor="middle">UTMALDG/STG · UTMAREDG · PF</text>
+          <text class="tiny t-uni" x="290" y="184">TMA · uniform engine · 发起占 1 issue</text><text class="tiny" x="290" y="200">descriptor(UR) · 固定 BULK-SB</text>
+          <rect class="box mem" x="540" y="168" width="200" height="40" rx="6"/><text class="tiny t-mem" x="640" y="184" text-anchor="middle">shared / L1（仅此）</text><text class="tiny" x="640" y="199" text-anchor="middle">mbarrier tx-count</text>
+
+          <rect class="box ctl" x="20" y="218" width="240" height="40" rx="6"/><text class="sub t-ctl" x="140" y="242" text-anchor="middle">MBAR.INIT/ARRIVE/TRYWAIT · ELECT</text>
+          <text class="tiny t-ctl" x="290" y="234">跨 warp · shared 64-bit 对象 · phase</text><text class="tiny" x="290" y="250">不占 6 SBx · ELECT 选 leader 发 TMA</text>
+        </svg>
+        <figcaption><b>图 6</b> · 访存三档通路：同步 <code>LD/ST</code>（经 RF）、异步 <code>CPY</code>（bypass RF、SB_cpy 组）、<code>TMA</code> bulk（uniform engine、BULK-SB、只落 shared）；跨 warp 完成由 mbarrier 的 tx-count 收集，<code>ELECT</code> 选 leader 发射 descriptor。</figcaption>
+      </figure>
+
+      <h3>子族与代表指令</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>子族</th><th>代表指令</th><th>资源域 · 完成</th></tr></thead>
+        <tbody>
+          <tr><td><b>同步访存</b></td><td class="mono">LD/ST · LDG/STG · LDS/STS · LDL/STL · LDC/ULDC · ATOM/ATOMG/ATOMS · RED · PREFETCH</td><td>AGU · decoupled · &amp;WR/&amp;RD</td></tr>
+          <tr><td><b>异步 copy</b></td><td class="mono">CPY · CPY_COMMIT · CPY_WAIT</td><td>AGU · bypass RF · 固定 SB_cpy</td></tr>
+          <tr><td><b>TMA</b></td><td class="mono">UTMALDG{.MCAST} · UTMASTG · UTMAREDG · UTMAPF · UTMACMDFLUSH · UTMACCTL</td><td>TMA · uniform engine · BULK-SB</td></tr>
+          <tr><td><b>mbarrier</b></td><td class="mono">MBAR.INIT/INVAL · ARRIVE{.ETX,.DROP} · CTX · TRYWAIT/TESTWAIT · PENDCNT · ELECT</td><td>CBU · 跨 warp / CTA · shared 状态</td></tr>
+          <tr><td><b>bulk copy</b></td><td class="mono">UBLKCP{.MCAST}（无 descriptor 1D bulk）</td><td>BULK 通道 · BULK-SB / mbarrier</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>6 个物理 SB 的分工</h3>
+      <p>四类可变延迟完成跟踪共享 §03 的 6 个 Dependence counter，分工固定以保证并发度：</p>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>用途</th><th>占用</th><th>完成动作</th></tr></thead>
+        <tbody>
+          <tr><td>通用 load / store / ATOM</td><td class="num">动态池 ≤4</td><td><code>&amp;WR</code> 写回 −1 / <code>&amp;RD</code> 读源 −1</td></tr>
+          <tr><td>异步 copy 组</td><td class="num">固定 1（SB_cpy）</td><td>组计数 · <code>DEPBAR.LE</code></td></tr>
+          <tr><td>TMA / UBLKCP bulk 组</td><td class="num">固定 1（BULK-SB）</td><td>组计数 · <code>DEPBAR.LE</code> / mbarrier</td></tr>
+          <tr><td>MMA group（§09）</td><td class="num">独立 group SB</td><td>不占 6 SBx · <code>MMA.WAIT</code></td></tr>
+          <tr><td>mbarrier</td><td class="num">不占 SBx</td><td>走 shared phase / tx-count</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>关键约定</h3>
+      <ul class="clean">
+        <li><b>地址空间即 operand 类型</b>：通用 <code>LD/ST</code> 按地址空间选 RF / shared / global 通路，不靠 mnemonic 后缀堆叠语义。</li>
+        <li><b>cache modifier 收敛（仅普通 LD/ST）</b>：load <code>{.CA/.CG/.CS/.CV/.LU}</code>、store <code>{.WB/.CG/.CS/.WT}</code> 与 order × scope 互斥；<strong>async bulk / atom / red / prefetch 不受此限</strong>，各自带合法的 <code>sem.scope × cache-hint × redOp</code> 组合。</li>
+        <li><b>atom / red 语义矩阵</b>：op ∈ {add,min,max,inc,dec,and,or,xor,cas,exch} × type（含 int / FP / F16 / BF16）× <code>sem.scope</code>（CTA/cluster/GPU/SYS）；合法 / 非法组合的完整真值表于编码定稿 / 机器描述层展开——attention counter、MoE histogram、optimizer 更新所需。</li>
+        <li><b>descriptor 驻 UR</b>：算 operand 类型，<strong>不占</strong>「大操作数」（<code>imm32 ⊕ c[][] ⊕ URb</code>）名额（见 §11）。</li>
+        <li><b>TMA 完成分三套</b>：<code>UTMALDG</code>（global→shared）经 mbarrier <code>complete_tx</code>（tx-count）；<code>UTMASTG</code>（shared→global）与 <code>UTMAREDG</code>（reduce，带 <code>redOp × type × scope</code>）经 <strong>bulk-group commit/wait + BULK-SB</strong> 跟踪完成。bulk 支持尾部修饰 <code>{.cp_mask, .ignore_oob, .b128}</code> 与只等源读完的 <code>wait.read</code>——ragged attention / 变长 KV-cache tile 边界所需。</li>
+        <li><b>TMA 只落 shared / L1</b>：<code>global ↔ shared</code> 双向；tensor-map descriptor 由 const / param 句柄入 UR；<code>tensormap.replace</code> 原子改写 descriptor 字段（base / dim / stride / box / swizzle），与 in-flight TMA 的 hazard 由 commit/wait 隔离——字段位布局于编码定稿层展开。</li>
+        <li><b>L2 residency 策略</b>：<code>createpolicy / applypriority</code> 式 cache-hint 控制 KV-cache 驻留 vs 流式逐出（persisting / streaming / normal），挂普通 <code>LD/ST</code> 与 TMA 的 cache-hint 槽；窗口与策略编码于编码定稿层展开。</li>
+        <li><b>mbarrier 退出语义</b>：<code>ARRIVE.DROP</code> 让线程退出 barrier 参与集（warp-specialization 部分 warp 退出），与 <code>.ETX</code>（expect-tx）、release / relaxed 组合。</li>
+        <li><b>DEPBAR.LE 组等待</b>：异步 copy / TMA 组完成用它（对单 SB 等 ≤N，区别于 wait-mask 的 EQ-0）；MMA group 完成走专用 <code>MMA.WAIT / MMA.DEPBAR.LE</code>（group SB 独立于 6 SBx，见 §09）。</li>
+        <li><b>cluster 层</b>：thread-block cluster 引入分布式 shared memory（DSMEM，§02）；<code>ARRIVE.CLUSTER{.ETX,.DROP}</code> 对远程 CTA 的 DSMEM mbarrier 执行 arrive，按 release scope 原子推进目标 phase / tx-count，消费侧 <code>TRYWAIT</code> 按 acquire scope 观察；TMA <code>.MCAST</code> multicast（<code>UTMALDG.MCAST</code> 多 CTA 共享 tile）、跨 CTA <code>red</code> 聚合、scope 阶梯 cluster（§03）一并启用。</li>
+      </ul>
+    </section>
+
+    <!-- 09 TENSOR -->
+    <section id="tensor" class="reveal">
+      <div class="sec-head"><span class="sec-no">09</span><h2>张量与低精度指令族</h2><span class="sec-tag">MMA · tensor-mem · MX / NVFP4</span></div>
+      <p class="sec-intro">脉动阵列的指令面：<strong>单 MMA 母机</strong>——格式 / 形状 / 缩放走 <code>.kind</code> + idesc，不铸多 opcode；<strong>leader 单线程发起</strong>（一个 lane 发描述符，类似 TMA）+ pre-fence + group 完成。低精度 block-scale 在张量域闭合 §07 的量化链。</p>
+      <div class="legend">
+        <span><i class="sw-ten"></i>MMA · 张量近存 · leader-issue</span><span><i class="sw-mem"></i>shared 供数</span>
+      </div>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 270" role="img" aria-label="MMA 接口与完成">
+          <text class="tiny" x="375" y="32" text-anchor="middle">MMA .kind / .shape / idesc(M·N·K·dtype·transpose·sparse) / .block{B16,B32}</text>
+          <path class="edge" d="M375 40 V62" stroke-dasharray="3 3"/>
+
+          <rect class="box mem" x="18" y="86" width="120" height="92" rx="8"/><text class="lbl t-mem" x="78" y="110" text-anchor="middle">shared</text><text class="tiny" x="78" y="128" text-anchor="middle">A / B fragment</text><text class="tiny" x="78" y="143" text-anchor="middle">descriptor(UR)</text><text class="tiny" x="78" y="158" text-anchor="middle">无 GPR fragment</text>
+
+          <rect class="box ten" x="300" y="62" width="150" height="132" rx="8"/><text class="lbl t-ten" x="375" y="82" text-anchor="middle">脉动阵列</text>
+          <g>
+            <rect class="box ten" x="318" y="94" width="20" height="20" rx="3"/><rect class="box ten" x="342" y="94" width="20" height="20" rx="3"/><rect class="box ten" x="366" y="94" width="20" height="20" rx="3"/><rect class="box ten" x="390" y="94" width="20" height="20" rx="3"/><rect class="box ten" x="414" y="94" width="20" height="20" rx="3"/>
+            <rect class="box ten" x="318" y="118" width="20" height="20" rx="3"/><rect class="box ten" x="342" y="118" width="20" height="20" rx="3"/><rect class="box ten" x="366" y="118" width="20" height="20" rx="3"/><rect class="box ten" x="390" y="118" width="20" height="20" rx="3"/><rect class="box ten" x="414" y="118" width="20" height="20" rx="3"/>
+            <rect class="box ten" x="318" y="142" width="20" height="20" rx="3"/><rect class="box ten" x="342" y="142" width="20" height="20" rx="3"/><rect class="box ten" x="366" y="142" width="20" height="20" rx="3"/><rect class="box ten" x="390" y="142" width="20" height="20" rx="3"/><rect class="box ten" x="414" y="142" width="20" height="20" rx="3"/>
+          </g>
+          <text class="tiny t-ten" x="375" y="184" text-anchor="middle">PE 内累加 · output-stationary</text>
+
+          <rect class="box ten" x="600" y="74" width="150" height="104" rx="8"/><text class="lbl t-ten" x="675" y="98" text-anchor="middle">张量近存</text><text class="tiny" x="675" y="116" text-anchor="middle">累加器 C / D</text><text class="tiny" x="675" y="131" text-anchor="middle">block-scale 矩阵</text><text class="tiny" x="675" y="146" text-anchor="middle">TMEM-addr · 不占 RF</text>
+
+          <path class="edge" d="M138 124 H300" marker-end="url(#mmaA)"/><text class="tiny t-mem" x="219" y="116" text-anchor="middle">A · B</text>
+          <path class="edge-l" d="M600 112 H450" marker-end="url(#mmaL)"/><text class="tiny t-ten" x="525" y="104" text-anchor="middle">C · scale</text>
+          <path class="edge-l" d="M450 152 H600" marker-end="url(#mmaL)"/><text class="tiny t-ten" x="525" y="170" text-anchor="middle">D drain</text>
+
+          <path class="edge-c" d="M78 178 V228 H675 V178" marker-end="url(#mmaC)" stroke-dasharray="4 3"/><text class="tiny t-uni" x="380" y="246" text-anchor="middle">CPYT：shared → tensor-mem（权重 / 累加初值预载 · FP6/FP4 解压）</text>
+
+          <defs>
+            <marker id="mmaA" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--ink-faint)"/></marker>
+            <marker id="mmaL" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--lime)"/></marker>
+            <marker id="mmaC" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--cyan)"/></marker>
+          </defs>
+        </svg>
+        <figcaption><b>图 7</b> · MMA 接口：<code>@elected</code> 单 lane 发起（非发起 lane skip），A/B fragment 经 shared descriptor 入阵列（无 GPR fragment），累加器 C/D 与 block-scale 矩阵驻张量近存（不占 RF）；<code>CPYT</code> 预载权重 / 累加初值。完成 = <code>MMA.FENCE</code>（操作数可见）+ group scoreboard（<code>MMA.COMMIT → MMA.WAIT N</code>），独立于 6 个通用 SBx。</figcaption>
+      </figure>
+
+      <h3>子族与代表指令</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>子族</th><th>代表指令</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><b>MMA 母机</b></td><td class="mono">MMA{.SP}(.kind .shape idesc .block)</td><td>单 opcode；HMMA/QMMA/IMMA 收为 .kind 变体；.SP = 2:4/4:8 稀疏</td></tr>
+          <tr><td><b>发起 / 完成</b></td><td class="mono">MMA.FENCE · MMA.COMMIT{.MBAR} · MMA.WAIT · MMA.DEPBAR.LE</td><td>leader-issue · pre-fence · 独立 group scoreboard</td></tr>
+          <tr><td><b>张量近存访问</b></td><td class="mono">LDT · LDT.RED · STT · LDT.WAIT · TMALLOC · TMFREE</td><td>AGU 域 · 占物理 SBx · LDT.RED 累加器域归约</td></tr>
+          <tr><td><b>输入预载</b></td><td class="mono">CPYT · CPYT.UNPACK（FP6/FP4 解压）</td><td>shared → tensor-mem · RF 旁路</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>MMA 母机：单 opcode + 结构化字段</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>字段</th><th>取值</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">.kind</td><td>F16 / BF16 / F8F6F4 / I8 / I4 · MX / NVFP4</td><td>数据格式族（决定累加精度）</td></tr>
+          <tr><td class="mono">.shape</td><td>tile-class 选择子（合法性索引）</td><td>选 MMA tile 类，<b>不</b>携带 M/N/K 真值</td></tr>
+          <tr><td class="mono">idesc</td><td>M / N / K / dtype / transpose / sparse</td><td>形状与类型的<b>唯一真源</b></td></tr>
+          <tr><td class="mono">.block</td><td>B16 / B32</td><td>block-scale 粒度 · 须与 amax 归约窗口对齐</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>关键约定</h3>
+      <ul class="clean">
+        <li><b>单 MMA opcode</b>：格式差异（F16 / FP8 / FP4 / INT8）是 <code>.kind</code> 而非独立 opcode；M/N/K 唯一由 idesc 给出、<code>.shape</code> 仅选 tile-class——对齐 §07 的 <code>IMUL = IMAD</code> 别名原则。</li>
+        <li><b>leader 单线程发起（SINGLETON）</b>：MMA 为 SINGLETON 指令，由 <code>ELECT</code> 在 membermask 内选出<strong>唯一</strong> leader lane（<code>@elected</code> guard）发描述符；验证规则 = membermask / active 内 <strong>exactly-one</strong> leader，否则 illegal。非 leader lane 在该 PC 处 guard 假、跳过，ITS 下由收敛屏障保证 warp 在 MMA 处收敛、leader 与非 leader 同步前进。累加开关 <code>enable-acc</code> 是 leader 的 <strong>scalar 输入谓词</strong>，不再用 per-warp UP。对齐 Blackwell tcgen05 单线程发起，与「A/B 经 shared descriptor、无 GPR fragment」自洽。</li>
+        <li><b>累加器在张量近存内累加</b>：A/B 经 shared descriptor 流入、无 GPR fragment；C/D 驻 <code>TMEM-addr</code>，经 <code>LDT/STT</code> 与 RF 往来。</li>
+        <li><b>完成 = pre-fence + 专用 group scoreboard</b>：<code>MMA.FENCE</code> 保证 shared 上 A/B 写在 MMA 读前可见；<code>MMA.COMMIT</code> 提交、<code>MMA.WAIT N</code> / <code>MMA.DEPBAR.LE</code> 等阈值。MMA group scoreboard <strong>独立于 6 个通用 SBx</strong>，故只能由 <code>MMA.WAIT / MMA.DEPBAR.LE</code> 寻址——通用 <code>DEPBAR.LE</code>（管 6 SBx 的 copy/TMA 组）<strong>不</strong>跨等 MMA group。MMA 属 async proxy，完成可经 <code>.MBAR</code> 通知跨 warp 消费者。</li>
+        <li><b>TMEM 内存序独立于寄存器就绪</b>：<code>LDT</code>（TMEM→GPR）的寄存器 scoreboard 不代表 TMEM 内存排序，后接 MMA / 访存前用 <code>LDT.WAIT</code> 显式等待（对齐 NV <code>tcgen05.wait::ld</code>）。</li>
+        <li><b>block-scale 闭合量化链</b>：scale 矩阵（MX UE8M0 / NVFP4 E4M3）驻张量近存；<code>.block</code> 粒度（B16/B32）<strong>必须</strong>与 §10 的 amax 归约窗口（∈{16,32}）对齐，否则块内缩放与归约窗口错位。</li>
+        <li><b>低精度权重经 CPYT 预载</b>：<code>shared → tensor-mem</code> 直拷，含 <code>CPYT.UNPACK</code> 的 FP6（E3M2/E2M3）/ FP4 解压——NVFP4/MXFP4 权重路径所需（决策 4 低精度定位）；多 warp 共享 tile 的 multicast 随 cluster 提供（§10）。</li>
+        <li><b>MMA.SP（2:4 / 4:8 结构化稀疏）</b>：稀疏权重 MMA（有效吞吐≈2×）；sparse metadata 选择子绑定 <code>reuse[4]</code> 第 4 槽（稀疏 MMA 下该槽专用、不作 reuse），脉动阵列 PE 按 metadata 跳过零元素。</li>
+        <li><b>accumulator-domain 归约</b>：<code>LDT.RED</code> 对张量近存累加器直接做 row / col 段归约（attention row-max/row-sum、layernorm mean/var、per-channel amax），免 <code>LDT→GPR→SIMT redux</code> 往返。</li>
+      </ul>
+    </section>
+
+    <!-- 10 CONTROL -->
+    <section id="control" class="reveal">
+      <div class="sec-head"><span class="sec-no">10</span><h2>控制 · 同步 · uniform 指令族</h2><span class="sec-tag">branch · barrier · warp · uniform</span></div>
+      <p class="sec-intro">cross-lane 协作的<strong>规范名归 warp 协作族</strong>，带<strong>显式 membermask</strong>（active mask 作验证基线）；uniform 通路只提供写 UR/UP 的 <code>.U</code> 变体——同一机器操作不双铸 opcode。</p>
+      <div class="legend">
+        <span><i class="sw-ctl"></i>控制流 / 同步 · CBU</span><span><i class="sw-vec"></i>warp 协作 · cross-lane</span><span><i class="sw-uni"></i>uniform · UDP</span>
+      </div>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="控制同步uniform四子族与单一事实源">
+          <rect class="box ctl" x="250" y="20" width="260" height="48" rx="8"/><text class="lbl t-ctl" x="380" y="42" text-anchor="middle">显式 membermask · active 作基线</text><text class="tiny" x="380" y="58" text-anchor="middle">membermask ⊆ BSSY/BSYNC active mask</text>
+
+          <path class="edge" d="M300 68 C 200 96 120 104 102 120" stroke-dasharray="3 3" marker-end="url(#eah)"/>
+          <path class="edge" d="M340 68 C 320 96 290 106 282 120" stroke-dasharray="3 3" marker-end="url(#eah)"/>
+          <path class="edge" d="M420 68 C 440 96 460 106 462 120" stroke-dasharray="3 3" marker-end="url(#eah)"/>
+          <path class="edge" d="M460 68 C 560 96 620 104 650 120" stroke-dasharray="3 3" marker-end="url(#eah)"/>
+
+          <rect class="box ctl" x="18" y="120" width="168" height="152" rx="8"/><text class="lbl t-ctl" x="102" y="140" text-anchor="middle">控制流 · CBU</text>
+          <text class="tiny" x="102" y="160" text-anchor="middle">BRA{.U}{.DIV} · JMP</text><text class="tiny" x="102" y="176" text-anchor="middle">BRX · CALL · RET</text><text class="tiny" x="102" y="192" text-anchor="middle">EXIT · KILL</text><text class="tiny" x="102" y="208" text-anchor="middle">BSSY · BSYNC</text><text class="tiny" x="102" y="224" text-anchor="middle">BREAK · CONT</text><text class="tiny t-ctl" x="102" y="244" text-anchor="middle">CBR ≥16 · SINGLETON</text><text class="tiny" x="102" y="260" text-anchor="middle">BRANCH_TYPE 属性</text>
+
+          <rect class="box ctl" x="198" y="120" width="168" height="152" rx="8"/><text class="lbl t-ctl" x="282" y="140" text-anchor="middle">同步 · CBU + fence</text>
+          <text class="tiny" x="282" y="160" text-anchor="middle">BAR.SYNC/ARV/RED</text><text class="tiny" x="282" y="176" text-anchor="middle">WARPSYNC</text><text class="tiny" x="282" y="192" text-anchor="middle">YIELD · NANOSLEEP</text><text class="tiny" x="282" y="208" text-anchor="middle">FENCE（单 opcode）</text><text class="tiny" x="282" y="224" text-anchor="middle">MEMBAR · CCTL · SETMAXNREG</text><text class="tiny" x="282" y="244" text-anchor="middle">named bar 0–15 · BAR.CLUSTER</text><text class="tiny t-ctl" x="282" y="260" text-anchor="middle">FENCE.PROXY.ASYNC</text>
+
+          <rect class="box vec" x="378" y="120" width="168" height="152" rx="8"/><text class="lbl t-vec" x="462" y="140" text-anchor="middle">warp 协作 · cross-lane</text>
+          <text class="tiny" x="462" y="160" text-anchor="middle">SHFL · MATCH</text><text class="tiny" x="462" y="176" text-anchor="middle">VOTE{.U} · REDUX{.U}</text><text class="tiny" x="462" y="192" text-anchor="middle">ACTIVEMASK</text><text class="tiny t-vec" x="462" y="212" text-anchor="middle">decoupled · 写 SB</text><text class="tiny" x="462" y="232" text-anchor="middle">amax = REDUX.FMAX.ABS</text><text class="tiny t-vec" x="462" y="252" text-anchor="middle">显式 membermask</text>
+
+          <rect class="box uni" x="558" y="120" width="184" height="152" rx="8"/><text class="lbl t-uni" x="650" y="140" text-anchor="middle">uniform · UDP</text>
+          <text class="tiny" x="650" y="160" text-anchor="middle">UMOV · ULDC · UIADD3</text><text class="tiny" x="650" y="176" text-anchor="middle">UIMAD · ULOP3 · USHF</text><text class="tiny" x="650" y="192" text-anchor="middle">UISETP · UFSETP · UFFMA</text><text class="tiny" x="650" y="208" text-anchor="middle">R2UR · UR2R · S2UR</text><text class="tiny" x="650" y="224" text-anchor="middle">UBRA · UWARPSYNC</text><text class="tiny t-uni" x="650" y="244" text-anchor="middle">.U 变体写 UR/UP</text><text class="tiny" x="650" y="260" text-anchor="middle">UR 6-bit 域</text>
+
+          <defs><marker id="eah" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--ink-faint)"/></marker></defs>
+        </svg>
+        <figcaption><b>图 8</b> · cross-lane 协作（<code>VOTE / REDUX / MATCH / SHFL</code>）带显式 <code>membermask</code>，以 BSSY/BSYNC active mask 作验证基线（<code>membermask ⊆ active</code>）；规范名归 warp 协作族（XLANE · decoupled 写 SB），uniform 通路只提供写 UR/UP 的 <code>.U</code> 变体，不另铸 opcode。</figcaption>
+      </figure>
+
+      <h3>子族与代表指令</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>子族</th><th>代表指令</th><th>资源域</th></tr></thead>
+        <tbody>
+          <tr><td><b>控制流</b></td><td class="mono">BRA{.U}{.DIV} · JMP · BRX · CALL · RET · EXIT · KILL · BSSY · BSYNC · BREAK · CONT</td><td>CBU · SINGLETON</td></tr>
+          <tr><td><b>屏障与同步</b></td><td class="mono">BAR.SYNC/ARV/RED · BAR.CLUSTER · WARPSYNC · YIELD · NANOSLEEP · FENCE · MEMBAR · CCTL · SETMAXNREG</td><td>CBU + fence</td></tr>
+          <tr><td><b>warp 协作</b></td><td class="mono">SHFL · VOTE{.U} · MATCH · REDUX{.U} · ACTIVEMASK（均带 membermask）</td><td>XLANE · decoupled · 写 SB</td></tr>
+          <tr><td><b>uniform</b></td><td class="mono">UMOV · ULDC · UIADD3 · UIMAD · ULOP3 · USHF · UISETP · UFSETP · UFFMA · UPLOP3 · R2UR · UR2R · S2UR · UBRA · UWARPSYNC</td><td>UDP · coupled（+部分 decoupled）</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>规范名归一（去重）</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>机器操作</th><th>规范名（owner）</th><th>uniform 形态</th></tr></thead>
+        <tbody>
+          <tr><td>warp 投票</td><td class="mono">VOTE / VOTE.U</td><td>写 UP/UR 的 <code>.U</code> 变体，<b>非</b> VOTEU</td></tr>
+          <tr><td>warp 归约</td><td class="mono">REDUX / REDUX.U</td><td>写 UR 的 <code>.U</code> 变体，<b>非</b> UREDUX</td></tr>
+          <tr><td>warp 重收敛同步</td><td class="mono">WARPSYNC</td><td>UWARPSYNC = mask 取 UP/UR 的源变体，同一 class</td></tr>
+          <tr><td>cross-lane amax</td><td class="mono">REDUX.FMAX.ABS</td><td>量化链第一环 owner（§07 / §09）</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>关键约定</h3>
+      <ul class="clean">
+        <li><b>cross-lane 规范名唯一</b>：<code>VOTE / REDUX / MATCH / SHFL</code> 定义于 warp 协作族；uniform 不铸独立 <code>VOTEU / UREDUX</code>，只作写 UR/UP 的 <code>.U</code> 变体。<code>WARPSYNC</code> 单一 class，mask 来源（P/UP）是操作数变体。</li>
+        <li><b>cross-lane = decoupled + 写 SB</b>：归约延迟非定值，与 §07 的 SFU 同列 decoupled——故「SFU 是唯一 decoupled 例外」不成立。</li>
+        <li><b>amax = REDUX.FMAX.ABS</b>：量化链第一环 owner；归约窗口 ∈{16,32}，须与 MMA <code>.block</code>（B16/B32）对齐。</li>
+        <li><b>显式 membermask + active 基线</b>：cross-lane / <code>WARPSYNC</code> 带 32-bit <code>membermask</code> 操作数声明参与 lane 子集（支持 subwarp 分组 softmax / MoE top-k）；验证基线 = <strong>该指令 issue 时当前收敛域的 active mask</strong>（要求 <code>membermask ⊆ active</code>、mask 内 lane 须执行同一 collective 否则 UB），active mask <strong>不替代</strong>显式 mask；需要时先 <code>WARPSYNC membermask</code> 重收敛。<code>EXIT/KILL/RET</code> 退出的 lane 即时从所有活跃 CBR 撤离（starvation-free 硬前置）。</li>
+        <li><b>guard[4] 只寻址 P</b>：条件分支 guard = 3-bit P-index + 1 negate；UP-guard 由 uniform 控制 opcode（<code>UBRA / UWARPSYNC</code>）隐含取自 UP-file，不需第 5 bit 选 class。</li>
+        <li><b>动态寄存器上限</b>：<code>SETMAXNREG.{INC,DEC}</code> 在 warp-specialization 下让 producer warp 降寄存器、consumer warp 增寄存器以提 occupancy；SINGLETON。</li>
+        <li><b>cluster 层</b>：thread-block cluster 引入后，scope 阶梯插入 <code>cluster</code>（§03）、<code>BAR.CLUSTER</code> 跨 CTA 同步、mbarrier <code>.CLUSTER</code> 远程 arrive、TMA <code>.MCAST</code> multicast、分布式 shared memory（DSMEM，§02）一并启用。</li>
+        <li><b>单 FENCE opcode</b>：ordering / 可见性由 modifier 组合（scope × proxy）；<code>MEMBAR = FENCE</code> 别名；<strong>scope 含 cluster</strong>（<code>CTA / cluster / GPU / SYS</code>，FENCE / sem.scope / atom-red / mbarrier 统一适用，覆盖 DSMEM 与 remote arrive 的 release-acquire）。<code>FENCE.PROXY.ASYNC</code>（TMA → shared → 脉动阵列关键路径）。</li>
+        <li><b>BRANCH_TYPE 含 BRT_BRANCHOUT</b>：<code>BRA.DIV / BREAK</code>（离开收敛域）标 BRT_BRANCHOUT，区别于域内 BRT_BRANCH，供 CFG / 收敛域分析。</li>
+        <li><b>SINGLETON 机器属性</b>：全部 CBU 同步 / 控制类 + <code>CPY_COMMIT / UTMACMDFLUSH / MBAR.*</code> + <code>MMA</code>（leader-issue，§09）显式声明 SINGLETON=true（独占发射槽）。</li>
+        <li><b>named barrier 独立</b>：CTA 命名屏障 0–15（4-bit id 在 payload）与 6 个依赖 SB（3-bit 选择）是两套，互不挤占。</li>
+        <li><b>uniform 桥接非对称</b>：<code>R2UR</code>（GPR→UR，跨 lane 归一，重）/ <code>UR2R</code>（UR→GPR，近免费）；<code>ELECT</code>（leader 选举）供 TMA 与 MMA leader-issue 发射（§05 / §09）。</li>
+      </ul>
+    </section>
+
+    <!-- 11 ENCODING -->
+    <section id="encoding" class="reveal">
+      <div class="sec-head"><span class="sec-no">11</span><h2>编码定稿与重定位</h2><span class="sec-tag">bit budget · relocation · disasm</span></div>
+      <p class="sec-intro">所有指令最宽形态<strong>单 128-bit 字编码通过</strong>：最紧形态 TMA 5D-tile 余 16 bit，<strong>不需 short-imm、不需双字</strong>。重定位与反汇编保护控制段的静态调度契约。</p>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 232" role="img" aria-label="逐 class 载荷预算条形图">
+          <text class="tiny" x="20" y="22">91-bit 载荷 · 最宽形态占用（编码预算，精确偏移待编码定稿）</text>
+          <line class="die" x1="150" y1="34" x2="150" y2="220"/>
+          <line class="die" x1="690" y1="34" x2="690" y2="220"/>
+          <text class="tiny" x="150" y="232" text-anchor="middle">0</text>
+          <text class="tiny" x="690" y="232" text-anchor="middle">91-bit</text>
+
+          <text class="sub t-uni" x="20" y="59">TMA 5D</text>
+          <rect class="box uni" x="150" y="46" width="445" height="18" rx="3"/><text class="tiny t-uni" x="603" y="59">75 · slack 16（最紧）</text>
+
+          <text class="sub t-ten" x="20" y="89">MMA blk-scale</text>
+          <rect class="box ten" x="150" y="76" width="409" height="18" rx="3"/><text class="tiny t-ten" x="567" y="89">69 · slack 22</text>
+
+          <text class="sub t-vec" x="20" y="119">FFMA imm32+3R</text>
+          <rect class="box vec" x="150" y="106" width="433" height="18" rx="3"/><text class="tiny t-vec" x="591" y="119">73 · slack 18</text>
+
+          <text class="sub t-vec" x="20" y="149">BFI 4-operand</text>
+          <rect class="box vec" x="150" y="136" width="356" height="18" rx="3"/><text class="tiny t-vec" x="514" y="149">60 · slack 31</text>
+
+          <text class="sub t-mem" x="20" y="179">LDG [Ra+off]</text>
+          <rect class="box mem" x="150" y="166" width="332" height="18" rx="3"/><text class="tiny t-mem" x="490" y="179">56 · slack 35</text>
+
+          <text class="sub t-vec" x="20" y="209">PRMT 3R</text>
+          <rect class="box vec" x="150" y="196" width="297" height="18" rx="3"/><text class="tiny t-vec" x="455" y="209">50 · slack 41</text>
+        </svg>
+        <figcaption><b>图 9</b> · 91-bit 载荷占用。<b>最紧形态 TMA 5D-tile 仍余 16 bit</b>，故单字编码通过、不引入 short-imm、不需双字。bit 为预算，逐字段冲突表在编码定稿确定。</figcaption>
+      </figure>
+
+      <h3>整字分区与大操作数口径</h3>
+      <ul class="clean">
+        <li><b>整字分区</b>（高位 → 低位）：控制段[21] · opcode[≈12] · guard[4] · 载荷[≈91]——编码器 / 反汇编器 / 调度器共用这一顺序（与图 1 一致）。</li>
+        <li><b>operand-form selector</b> <code>fsel[3]</code>：互斥选择载荷内「大操作数」形态 <code>imm32 ⊕ c[bank][off] ⊕ URb</code>。</li>
+        <li><b>「至多一个大操作数」是 operand 类别计数规则，非 bit 预算</b>：每条指令至多一个 imm32 / c[][] / URb；GPR（8-bit）、UR 句柄（6-bit，如 descriptor）算<strong>小操作数</strong>，不占该名额。相邻 UR 对（如 <code>DESCa/DESCb</code>）算单个 URb 大操作数。</li>
+        <li><b>TMEM-addr 操作数</b>：行 / 段 / lane 字段在此定位，不进入 GPR 分配域。</li>
+        <li><b>控制段借位（sparse）</b>：<code>reuse[4]</code> 第 4 槽在 <code>MMA.SP</code> 下重解释为 <strong>sparse-metadata 选择子</strong>（<code>spmeta_sel</code>），由 <code>.SP</code> modifier 触发、调度器不按 RF reuse 解释；属控制段语义复用，不占 91-bit 载荷。借位 / 重解释完整表于编码定稿层给出。</li>
+      </ul>
+
+      <h3>逐 class 载荷预算（最宽形态）</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>class</th><th>最宽形态</th><th>载荷</th><th>slack</th></tr></thead>
+        <tbody>
+          <tr><td>TMA 2D–5D</td><td class="mono">descriptor + 2D~5D coords</td><td class="num">62–75</td><td class="num">29–16</td></tr>
+          <tr><td>MMA block-scale</td><td class="mono">idesc + 2×scale-desc</td><td class="num">69</td><td class="num">22</td></tr>
+          <tr><td>FFMA + imm32</td><td class="mono">Rd + Ra + Rb + imm32</td><td class="num">73</td><td class="num">18</td></tr>
+          <tr><td>BFI</td><td class="mono">4 操作数</td><td class="num">60</td><td class="num">31</td></tr>
+          <tr><td>LDG [Ra+off]</td><td class="mono">base + offset imm</td><td class="num">56</td><td class="num">35</td></tr>
+          <tr><td>INT-ALU 母机</td><td class="mono">PRMT / SHF / SGXT / BMSK / POPC / FLO / BREV 3 源</td><td class="num">≤50</td><td class="num">≥41</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>重定位与反汇编</h3>
+      <ul class="clean">
+        <li><b>R_CURRY_* 重定位</b>：action-based、4-state handler，覆盖 PC-relative 分支 / 调用、global 符号（ABS）、TMA descriptor base、const-bank offset。</li>
+        <li><b>保护控制段静态调度契约</b>：<code>R_CURRY_INST128</code> 不得改写 21-bit 控制段；<code>R_CURRY_OPFIELD</code> 改 opcode 须满足 <strong>SAME_DOMAIN_AND_LATENCY</strong> 不变量（同资源域 + 同延迟类），否则链接期报错——否则 stall / SB 落点失效。</li>
+        <li><b>补端侧 AI 重定位</b>：dynamic / extern shared 窗口 base（launch 指派）、mbarrier / shared 符号、grid-constant（kernel-param：tensor base / dims / scale-factor 指针）。</li>
+        <li><b>canonical 反汇编</b>：pseudo-op 归一（<code>IMUL→IMAD(c=RZ)</code> · <code>MEMBAR→FENCE</code> · <code>UIMUL→UIMAD</code> · <code>KILL→EXIT.KILL</code> · <code>UDEPBAR→DEPBAR.LE</code>）；modifier 固定打印序；round-trip 验证含控制段维度（stall / yield / SB / wait-mask / reuse）。</li>
+      </ul>
+    </section>
+
+    <!-- 12 ROADMAP -->
+    <section id="roadmap" class="reveal">
+      <div class="sec-head"><span class="sec-no">12</span><h2>后续路线</h2><span class="sec-tag">plan</span></div>
+      <p class="sec-intro">ISA 主体（骨架 + 全指令族 + 编码定稿）已成稿，<strong>全功能定稿</strong>——无功能留待，剩余仅 uarch 协同标定。决策过程、备选与权衡另见内部决策档案。</p>
+      <div class="road">
+        <div class="row"><span class="rn">▸</span><span class="rt">指令字骨架<small>§01–06</small></span><span class="chip lock">已定稿</span></div>
+        <div class="row"><span class="rn">▸</span><span class="rt">计算类指令族<small>§07</small></span><span class="chip lock">已定稿</span></div>
+        <div class="row"><span class="rn">▸</span><span class="rt">访存类指令族<small>§08</small></span><span class="chip lock">已定稿</span></div>
+        <div class="row"><span class="rn">▸</span><span class="rt">张量 + 低精度<small>§09</small></span><span class="chip lock">已定稿</span></div>
+        <div class="row"><span class="rn">▸</span><span class="rt">控制 / 同步 / uniform<small>§10</small></span><span class="chip lock">已定稿</span></div>
+        <div class="row"><span class="rn">▸</span><span class="rt">编码定稿<small>§11 · 载荷预算 · relocation</small></span><span class="chip lock">已定稿</span></div>
+        <div class="row"><span class="rn">·</span><span class="rt">uarch 协同标定<small>latency table · stall 标定 · SB 物理染色 · 阵列尺寸</small></span><span class="chip prov">协同迭代</span></div>
+        <div class="row"><span class="rn">▸</span><span class="rt">cluster 层<small>DSMEM · BAR.CLUSTER · mbarrier .CLUSTER · TMA .MCAST · 跨 CTA reduce</small></span><span class="chip lock">已纳入</span></div>
+        <div class="row"><span class="rn">▸</span><span class="rt">全功能覆盖<small>3D–5D TMA · 累加器域归约 · L2 residency · tensormap.replace · im2col</small></span><span class="chip lock">全部纳入</span></div>
+      </div>
+      <footer class="foot">
+        curryGPU · ISA 与编码 · 指令集定稿 · 2026-05<br>
+        <b>方法</b>：借 NV 五层 instruction-class 模型，自定义编码；跨子族一致性 + 对照 NV PTX 的完备性 / 正确性，经独立对抗式评审收口。<br>
+        <b>边界</b>：位宽为编码预算，精确位偏移在编码定稿阶段确定；机器描述（latency / hazard 标定 / SB 物理染色）依赖 uarch，与 ISA 协同迭代。
+      </footer>
+    </section>
+
+  </main>
+</div>
+
+<script>
+const links=[...document.querySelectorAll('.nav a[href^="#"]')];
+const map=new Map(links.map(a=>[a.getAttribute('href').slice(1),a]));
+const spy=new IntersectionObserver((es)=>{
+  es.forEach(e=>{ if(e.isIntersecting){ links.forEach(l=>l.classList.remove('active')); const a=map.get(e.target.id); if(a)a.classList.add('active'); }});
+},{rootMargin:'-12% 0px -78% 0px'});
+document.querySelectorAll('section[id]').forEach(s=>spy.observe(s));
+const rev=new IntersectionObserver((es)=>{
+  es.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('in'); rev.unobserve(e.target);} });
+},{rootMargin:'0px 0px -8% 0px'});
+document.querySelectorAll('.reveal').forEach((el,i)=>{ el.style.transitionDelay=(Math.min(i,3)*60)+'ms'; rev.observe(el); });
+</script>
+</body>
+</html>

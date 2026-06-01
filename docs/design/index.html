@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>curryGPU · 设计文档</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0f14; --bg-2:#0e141b; --bg-3:#141c26; --bg-4:#1a2430;
+  --line:#23303f; --line-2:#2e3e50;
+  --ink:#e7eef5; --ink-dim:#9fb0c0; --ink-faint:#62748a;
+  --gold:#f4b740; --gold-2:#ffd27a; --gold-soft:rgba(244,183,64,.12);
+  --cyan:#48cbe0; --lime:#9bd84e; --blue:#5e9be6; --pink:#ec6fa6; --red:#ef6f6f;
+  --font-body:"IBM Plex Sans","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+  --font-mono:"IBM Plex Mono","Cascadia Code",ui-monospace,monospace;
+  --font-disp:"Chakra Petch","IBM Plex Sans","Noto Sans SC",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg); color:var(--ink); font-family:var(--font-body);
+  font-size:15.5px; line-height:1.72; -webkit-font-smoothing:antialiased;
+  background-image:
+    radial-gradient(900px 500px at 82% -8%, rgba(244,183,64,.07), transparent 60%),
+    radial-gradient(700px 600px at 0% 100%, rgba(72,203,224,.05), transparent 55%),
+    linear-gradient(transparent 95%, rgba(255,255,255,.02) 95%),
+    linear-gradient(90deg, transparent 95%, rgba(255,255,255,.02) 95%);
+  background-size:auto,auto,28px 28px,28px 28px;
+}
+::selection{background:var(--gold);color:#1a1206}
+a{color:var(--gold-2);text-decoration:none}
+.layout{display:grid;grid-template-columns:264px minmax(0,1fr);max-width:1320px;margin:0 auto}
+
+/* ---------- sidebar ---------- */
+.sidebar{
+  position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;
+  background:linear-gradient(180deg,var(--bg-2),var(--bg));
+  border-right:1px solid var(--line);padding:30px 22px 40px;
+}
+.brand{display:flex;align-items:baseline;gap:9px;margin-bottom:4px}
+.brand .logo{font-family:var(--font-disp);font-weight:700;font-size:26px;letter-spacing:.5px;color:var(--ink)}
+.brand .logo b{color:var(--gold)}
+.brand .v{font-family:var(--font-mono);font-size:11px;color:var(--ink-faint);border:1px solid var(--line-2);padding:1px 6px;border-radius:5px}
+.brand-sub{font-family:var(--font-mono);font-size:11px;color:var(--ink-faint);margin-bottom:26px;letter-spacing:.3px}
+.nav{list-style:none;display:flex;flex-direction:column;gap:1px}
+.nav a{
+  display:flex;align-items:center;gap:11px;color:var(--ink-dim);font-size:13.5px;
+  padding:7px 11px;border-radius:7px;border-left:2px solid transparent;transition:.18s;
+}
+.nav a .ix{font-family:var(--font-mono);font-size:10.5px;color:var(--ink-faint);width:16px}
+.nav a:hover{background:var(--bg-3);color:var(--ink)}
+.nav a.active{background:var(--gold-soft);color:var(--gold-2);border-left-color:var(--gold)}
+.nav a.active .ix{color:var(--gold)}
+.rail-stat{margin-top:26px;padding-top:18px;border-top:1px solid var(--line);font-family:var(--font-mono);font-size:11px;color:var(--ink-faint);line-height:1.9}
+.rail-stat b{color:var(--cyan)}
+
+/* ---------- main ---------- */
+main{padding:0 56px 120px;min-width:0}
+.hero{padding:64px 0 38px;border-bottom:1px solid var(--line)}
+.eyebrow{font-family:var(--font-mono);font-size:12px;letter-spacing:3px;text-transform:uppercase;color:var(--gold);margin-bottom:18px}
+.hero h1{font-family:var(--font-disp);font-weight:700;font-size:54px;line-height:1.04;letter-spacing:-.5px;margin-bottom:18px}
+.hero h1 .accent{color:var(--gold)}
+.lede{font-size:18px;color:var(--ink-dim);max-width:60ch;margin-bottom:26px}
+.lede b{color:var(--ink);font-weight:600}
+.badges{display:flex;flex-wrap:wrap;gap:9px}
+.badge{font-family:var(--font-mono);font-size:11.5px;padding:5px 11px;border-radius:20px;border:1px solid var(--line-2);color:var(--ink-dim);display:inline-flex;gap:7px;align-items:center}
+.badge .dot{width:6px;height:6px;border-radius:50%;background:var(--gold)}
+.badge.cy .dot{background:var(--cyan)} .badge.li .dot{background:var(--lime)}
+
+section{padding:54px 0;border-bottom:1px solid var(--line);scroll-margin-top:20px}
+.sec-head{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+.sec-no{font-family:var(--font-mono);font-size:13px;color:var(--gold);border:1px solid var(--line-2);background:var(--gold-soft);padding:3px 9px;border-radius:6px}
+h2{font-family:var(--font-disp);font-weight:600;font-size:30px;letter-spacing:-.2px}
+.sec-tag{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--ink-faint)}
+.sec-intro{color:var(--ink-dim);max-width:74ch;margin:14px 0 26px}
+h3{font-family:var(--font-disp);font-weight:600;font-size:18px;margin:30px 0 12px;color:var(--ink)}
+p{margin:11px 0;max-width:78ch}
+strong{color:var(--ink);font-weight:600}
+.hl{color:var(--gold-2);font-weight:600}
+code,kbd{font-family:var(--font-mono);font-size:.88em;background:var(--bg-3);border:1px solid var(--line);padding:1px 6px;border-radius:5px;color:var(--gold-2)}
+
+/* ---------- pills / legend ---------- */
+.legend{display:flex;flex-wrap:wrap;gap:16px;margin:6px 0 20px;font-family:var(--font-mono);font-size:11.5px;color:var(--ink-dim)}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.legend i{width:11px;height:11px;border-radius:3px;display:inline-block}
+.sw-vec{background:var(--gold)} .sw-uni{background:var(--cyan)} .sw-ten{background:var(--lime)} .sw-mem{background:var(--blue)} .sw-ctl{background:var(--pink)}
+
+/* ---------- figure ---------- */
+figure{margin:20px 0 6px;background:var(--bg-2);border:1px solid var(--line);border-radius:14px;padding:24px 22px 14px;overflow:hidden}
+figure svg{display:block;width:100%;height:auto}
+figcaption{font-family:var(--font-mono);font-size:11.5px;color:var(--ink-faint);margin-top:12px;padding-top:11px;border-top:1px solid var(--line);letter-spacing:.2px}
+figcaption b{color:var(--ink-dim);font-weight:500}
+
+/* svg shared */
+.dgm .box{fill:var(--bg-3);stroke:var(--line-2);stroke-width:1.4}
+.dgm .lbl{fill:var(--ink);font:600 13px var(--font-mono)}
+.dgm .sub{fill:var(--ink-dim);font:400 10.5px var(--font-mono)}
+.dgm .tiny{fill:var(--ink-faint);font:400 9.5px var(--font-mono)}
+.dgm .vec{fill:rgba(244,183,64,.13);stroke:var(--gold)} .dgm .t-vec{fill:var(--gold)}
+.dgm .uni{fill:rgba(72,203,224,.13);stroke:var(--cyan)} .dgm .t-uni{fill:var(--cyan)}
+.dgm .ten{fill:rgba(155,216,78,.13);stroke:var(--lime)} .dgm .t-ten{fill:var(--lime)}
+.dgm .mem{fill:rgba(94,155,230,.13);stroke:var(--blue)} .dgm .t-mem{fill:var(--blue)}
+.dgm .ctl{fill:rgba(236,111,166,.13);stroke:var(--pink)} .dgm .t-ctl{fill:var(--pink)}
+.dgm .die{fill:none;stroke:var(--line-2);stroke-width:1.4;stroke-dasharray:5 4}
+.dgm .edge{stroke:var(--ink-faint);stroke-width:1.5;fill:none}
+.dgm .edge-g{stroke:var(--gold);stroke-width:1.6;fill:none;opacity:.8}
+
+/* ---------- decision grid ---------- */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:14px;margin-top:8px}
+.card{background:var(--bg-2);border:1px solid var(--line);border-radius:12px;padding:17px 17px 16px;position:relative;transition:.2s}
+.card:hover{border-color:var(--line-2);transform:translateY(-2px)}
+.card .k{font-family:var(--font-mono);font-size:11px;color:var(--gold);letter-spacing:.5px;display:flex;justify-content:space-between;align-items:center}
+.card .k .n{color:var(--ink-faint)}
+.card h4{font-family:var(--font-disp);font-weight:600;font-size:16px;margin:9px 0 6px}
+.card p{font-size:13px;color:var(--ink-dim);margin:0;max-width:none}
+
+/* ---------- tables ---------- */
+.tbl{width:100%;border-collapse:collapse;margin:18px 0;font-size:13.5px}
+.tbl th,.tbl td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--line);vertical-align:top}
+.tbl thead th{font-family:var(--font-mono);font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--ink-faint);background:var(--bg-2);border-bottom:1px solid var(--line-2)}
+.tbl tbody tr:hover{background:var(--bg-2)}
+.tbl td b{color:var(--gold-2)}
+.tbl .num{font-family:var(--font-mono);color:var(--cyan);white-space:nowrap}
+.tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+.tbl-wrap .tbl{margin:0}
+
+/* ---------- callout ---------- */
+.note{border-left:3px solid var(--blue);background:rgba(94,155,230,.07);padding:14px 18px;border-radius:0 10px 10px 0;margin:18px 0;font-size:14px;color:var(--ink-dim)}
+.warn{border-left:3px solid var(--gold);background:var(--gold-soft);padding:14px 18px;border-radius:0 10px 10px 0;margin:18px 0;font-size:14px;color:var(--ink-dim)}
+.note b,.warn b{color:var(--ink)}
+.note .tag,.warn .tag{font-family:var(--font-mono);font-size:11px;letter-spacing:.5px;text-transform:uppercase;display:block;margin-bottom:5px}
+.note .tag{color:var(--blue)} .warn .tag{color:var(--gold)}
+
+/* ---------- list ---------- */
+ul.clean{list-style:none;margin:12px 0;display:flex;flex-direction:column;gap:9px}
+ul.clean li{padding-left:22px;position:relative;color:var(--ink-dim);max-width:80ch}
+ul.clean li::before{content:"▹";position:absolute;left:2px;color:var(--gold);font-size:13px}
+ul.clean li b{color:var(--ink)}
+
+/* status chips */
+.chip{font-family:var(--font-mono);font-size:10.5px;padding:2px 8px;border-radius:12px;white-space:nowrap}
+.chip.lock{background:rgba(155,216,78,.13);color:var(--lime);border:1px solid rgba(155,216,78,.3)}
+.chip.todo{background:rgba(236,111,166,.1);color:var(--pink);border:1px solid rgba(236,111,166,.28)}
+.chip.prov{background:var(--gold-soft);color:var(--gold-2);border:1px solid rgba(244,183,64,.3)}
+
+/* roadmap */
+.road{display:flex;flex-direction:column;gap:2px;margin-top:10px}
+.road .row{display:grid;grid-template-columns:30px 1fr auto;gap:14px;align-items:center;padding:11px 14px;border:1px solid var(--line);border-radius:9px;background:var(--bg-2)}
+.road .row .rn{font-family:var(--font-mono);font-size:12px;color:var(--ink-faint)}
+.road .row .rt{font-weight:600;font-size:14px}
+.road .row .rt small{display:block;font-weight:400;font-size:12px;color:var(--ink-faint)}
+
+/* sources */
+.src{columns:2;column-gap:34px;font-size:13px;color:var(--ink-dim)}
+.src .grp{break-inside:avoid;margin-bottom:18px}
+.src .grp h4{font-family:var(--font-mono);font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--gold);margin-bottom:7px}
+.src .grp div{margin:4px 0;padding-left:14px;text-indent:-14px}
+
+footer.foot{padding:40px 0 0;color:var(--ink-faint);font-family:var(--font-mono);font-size:12px;line-height:1.9}
+footer.foot b{color:var(--ink-dim)}
+
+.reveal{opacity:0;transform:translateY(14px);transition:opacity .6s ease,transform .6s ease}
+.reveal.in{opacity:1;transform:none}
+
+@media(max-width:920px){
+  .layout{grid-template-columns:1fr}
+  .sidebar{position:static;height:auto;border-right:none;border-bottom:1px solid var(--line)}
+  .nav{flex-direction:row;flex-wrap:wrap}.rail-stat{display:none}
+  main{padding:0 22px 80px}.hero h1{font-size:38px}.src{columns:1}
+}
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ================= SIDEBAR ================= -->
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">curry<b>GPU</b></span></div>
+    <div class="brand-sub">端侧 GPGPU · 设计文档</div>
+    <nav><ul class="nav">
+      <li><a href="#overview"><span class="ix">01</span>概览</a></li>
+      <li><a href="#contract"><span class="ix">02</span>设计契约</a></li>
+      <li><a href="#architecture"><span class="ix">03</span>整体架构</a></li>
+      <li><a href="#scheduling"><span class="ix">04</span>依赖与静态调度</a></li>
+      <li><a href="#tensor"><span class="ix">05</span>张量子系统</a></li>
+      <li><a href="#toolchain"><span class="ix">06</span>工具链</a></li>
+      <li><a href="#targets"><span class="ix">07</span>对标与目标带</a></li>
+      <li><a href="#borrow"><span class="ix">08</span>借鉴来源</a></li>
+      <li><a href="#isa"><span class="ix">09</span>ISA 与编码</a></li>
+      <li><a href="#risks"><span class="ix">10</span>风险与未决</a></li>
+      <li><a href="#roadmap"><span class="ix">11</span>文档路线图</a></li>
+      <li><a href="#sources"><span class="ix">12</span>参考信源</a></li>
+    </ul></nav>
+    <div class="rail-stat">
+      调研深度 · <b>4 轮</b> / <b>527 agent</b><br>
+      架构决策 · <b>8 项已锁</b><br>
+      校验方式 · 三票对抗式<br>
+      更新 · 2026-05
+    </div>
+  </aside>
+
+  <!-- ================= MAIN ================= -->
+  <main>
+    <header class="hero reveal">
+      <div class="eyebrow">Edge GPGPU · Architecture Design</div>
+      <h1>一颗可复现的<br><span class="accent">Jetson 级</span>开放 SM</h1>
+      <p class="lede">curryGPU 是一颗 <b>clean-slate、NVIDIA-SASS 设计哲学</b>的端侧 GPGPU：AI 张量算力 + 通用 SIMT 均衡，单 die、约 15–60W，<b>从编译器往下设计</b>，以<b>编译期静态调度</b>为能效差异点。</p>
+      <div class="badges">
+        <span class="badge"><span class="dot"></span>AI + 通用 均衡</span>
+        <span class="badge cy"><span class="dot"></span>15–60W · 单 die · LPDDR5</span>
+        <span class="badge li"><span class="dot"></span>FPGA 验证 → 学术流片</span>
+        <span class="badge"><span class="dot"></span>PTX-in / 自定义 SASS-out</span>
+      </div>
+    </header>
+
+    <!-- 01 OVERVIEW -->
+    <section id="overview" class="reveal">
+      <div class="sec-head"><span class="sec-no">01</span><h2>概览</h2><span class="sec-tag">positioning</span></div>
+      <p class="sec-intro">对标在<strong>峰值算力</strong>与<strong>能效 TOPS/W</strong>双维上超过开源 RISC-V GPGPU <strong>Vortex</strong> 与 <strong>承影/Ventus</strong>。一句话定位：<span class="hl">一颗可在 FPGA / 学术流片上复现的、开放/自定义的 Jetson-Thor 级 SM</span>——NVIDIA 最新的 Jetson Thor 用的正是 Blackwell GPU，本身就是"把 Blackwell 下放到端侧"的官方样板。</p>
+      <div class="warn"><span class="tag">明确不做</span><b>数据中心专用、FPGA/学术流片不可复现的特性一律剔除：</b>双 die NV-HBI、HBM、NVLink、机架级互连、RAS / 机密计算引擎。架构创新集中在张量数据通路、静态调度与异步供数。</div>
+    </section>
+
+    <!-- 02 CONTRACT -->
+    <section id="contract" class="reveal">
+      <div class="sec-head"><span class="sec-no">02</span><h2>设计契约</h2><span class="sec-tag">8 项已锁定决策</span></div>
+      <p class="sec-intro">以下 8 项是地基级取舍，已逐一拍板、自洽，作为后续实现的契约。</p>
+      <div class="cards">
+        <div class="card"><div class="k"><span>骨架</span><span class="n">01</span></div><h4>clean-slate ISA</h4><p>硬件 ISA 层从零设计，最贴近 NV SASS 编码哲学。</p></div>
+        <div class="card"><div class="k"><span>调度</span><span class="n">02</span></div><h4>静态控制位</h4><p>SASS 式编译期静态调度，软件可见依赖。<b>能效核心赌注。</b></p></div>
+        <div class="card"><div class="k"><span>张量</span><span class="n">03</span></div><h4>空间脉动阵列</h4><p>DSP-free 融合点积 PE，加宽扩吞吐。</p></div>
+        <div class="card"><div class="k"><span>精度</span><span class="n">04</span></div><h4>激进低精度</h4><p>FP8/FP6/FP4(E2M1) + INT8/INT4 + 微缩放 MX + NVFP4。</p></div>
+        <div class="card"><div class="k"><span>工具链</span><span class="n">05</span></div><h4>复用 NV 前端</h4><p>PTX-in / 自定义 SASS-out，curryGPU 作新后端目标。</p></div>
+        <div class="card"><div class="k"><span>指令字</span><span class="n">06</span></div><h4>128-bit 定长</h4><p>NV 式控制段（stall/yield/barrier/reuse）。</p></div>
+        <div class="card"><div class="k"><span>标量通路</span><span class="n">07</span></div><h4>uniform 通路</h4><p>URF + U 指令族，标量/地址计算卸出向量通路。</p></div>
+        <div class="card"><div class="k"><span>张量供数</span><span class="n">08</span></div><h4>张量近存 + TMA</h4><p>TMA 在 global↔shared 供数；脉动阵列 PE 内累加，drain 到自定义张量近存。</p></div>
+      </div>
+    </section>
+
+    <!-- 03 ARCHITECTURE -->
+    <section id="architecture" class="reveal">
+      <div class="sec-head"><span class="sec-no">03</span><h2>整体架构</h2><span class="sec-tag">system · SM</span></div>
+      <p class="sec-intro">单 die 多 SM + L2 + LPDDR5 控制器；每个 SM 内并置 SIMT 向量通路、uniform 标量通路与空间张量阵列，由静态发射的 warp 调度器统一驱动。</p>
+      <div class="legend">
+        <span><i class="sw-vec"></i>SIMT 向量</span><span><i class="sw-uni"></i>uniform 标量</span>
+        <span><i class="sw-ten"></i>张量阵列</span><span><i class="sw-mem"></i>存储 / 供数</span><span><i class="sw-ctl"></i>调度 / 控制</span>
+      </div>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 300" role="img" aria-label="系统级架构图">
+          <rect class="die" x="20" y="16" width="560" height="268" rx="14"/>
+          <text class="tiny" x="34" y="36">curryGPU — single die</text>
+          <!-- SM grid -->
+          <g>
+            <text class="sub" x="44" y="62">SM 阵列</text>
+          </g>
+          <!-- 12 SM cells -->
+          <g>
+            <!-- row1 --><rect class="box vec" x="44" y="72" width="116" height="46" rx="7"/><text class="lbl" x="102" y="100" text-anchor="middle">SM₀</text>
+            <rect class="box" x="172" y="72" width="116" height="46" rx="7"/><text class="sub" x="230" y="100" text-anchor="middle">SM₁</text>
+            <rect class="box" x="300" y="72" width="116" height="46" rx="7"/><text class="sub" x="358" y="100" text-anchor="middle">SM₂</text>
+            <rect class="box" x="428" y="72" width="116" height="46" rx="7"/><text class="sub" x="486" y="100" text-anchor="middle">SM₃</text>
+            <!-- row2 --><rect class="box" x="44" y="128" width="116" height="46" rx="7"/><text class="sub" x="102" y="156" text-anchor="middle">SM₄</text>
+            <rect class="box" x="172" y="128" width="116" height="46" rx="7"/><text class="sub" x="230" y="156" text-anchor="middle">SM₅</text>
+            <rect class="box" x="300" y="128" width="116" height="46" rx="7"/><text class="sub" x="358" y="156" text-anchor="middle">SM₆</text>
+            <rect class="box" x="428" y="128" width="116" height="46" rx="7"/><text class="sub" x="486" y="156" text-anchor="middle">SM₇</text>
+          </g>
+          <!-- L2 -->
+          <rect class="box mem" x="44" y="196" width="500" height="40" rx="7"/><text class="lbl t-mem" x="294" y="221" text-anchor="middle">L2 Cache</text>
+          <!-- connectors -->
+          <path class="edge" d="M102 174 V196 M230 174 V196 M358 174 V196 M486 174 V196"/>
+          <path class="edge" d="M294 236 V258 H294" /><path class="edge" d="M294 236 V270"/>
+          <!-- LPDDR5 -->
+          <rect class="box mem" x="612" y="120" width="126" height="60" rx="9"/><text class="lbl t-mem" x="675" y="146" text-anchor="middle">LPDDR5</text><text class="tiny" x="675" y="164" text-anchor="middle">外部存储</text>
+          <path class="edge" d="M544 216 H588 Q600 216 600 204 V156 Q600 150 612 150" />
+          <text class="tiny" x="612" y="206">无 HBM / NVLink / 双 die</text>
+        </svg>
+        <figcaption><b>图 1</b> · 系统级：单 die SM 阵列 → L2 → LPDDR5。剔除数据中心互连。</figcaption>
+      </figure>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 460" role="img" aria-label="SM 内部框图">
+          <rect class="die" x="16" y="14" width="728" height="434" rx="14"/>
+          <text class="tiny" x="30" y="34">Streaming Multiprocessor</text>
+          <!-- scheduler -->
+          <rect class="box ctl" x="34" y="46" width="692" height="40" rx="8"/>
+          <text class="lbl t-ctl" x="380" y="66" text-anchor="middle">Warp 调度器</text>
+          <text class="sub" x="380" y="80" text-anchor="middle">静态发射 · 读控制位（无记分牌 / 无重命名 / 无 ROB）</text>
+          <!-- three execution datapaths -->
+          <rect class="box vec" x="34" y="110" width="222" height="84" rx="8"/>
+          <text class="lbl t-vec" x="145" y="140" text-anchor="middle">SIMT 向量通路</text>
+          <text class="sub" x="145" y="160" text-anchor="middle">N×32 lane · ALU·FMA</text>
+          <text class="sub" x="145" y="178" text-anchor="middle">整数 / 浮点</text>
+
+          <rect class="box uni" x="269" y="110" width="222" height="84" rx="8"/>
+          <text class="lbl t-uni" x="380" y="140" text-anchor="middle">uniform 标量通路</text>
+          <text class="sub" x="380" y="160" text-anchor="middle">URF + U 指令族</text>
+          <text class="sub" x="380" y="178" text-anchor="middle">warp 内标量 / 地址</text>
+
+          <rect class="box ten" x="504" y="110" width="222" height="84" rx="8"/>
+          <text class="lbl t-ten" x="615" y="140" text-anchor="middle">空间张量阵列</text>
+          <text class="sub" x="615" y="160" text-anchor="middle">DSP-free 融合点积</text>
+          <text class="sub" x="615" y="178" text-anchor="middle">FP8/FP6/FP4 + MX</text>
+
+          <path class="edge" d="M145 86 V110 M380 86 V110 M615 86 V110"/>
+          <!-- shared SM interconnect bus: all execution units tap it -->
+          <path class="edge" d="M145 194 V210 M380 194 V210 M615 194 V210"/>
+          <path class="edge-g" d="M44 210 H716"/>
+          <text class="tiny t-vec" x="712" y="205" text-anchor="end">操作数 / 存储互连</text>
+          <!-- on-chip memory subsystem (shared by all units via the bus) -->
+          <rect class="box" x="34" y="226" width="692" height="104" rx="10"/>
+          <text class="sub" x="46" y="245">片上存储子系统 · SM 内共享</text>
+          <path class="edge" d="M130 210 V252 M287 210 V252 M464 210 V252 M652 210 V252"/>
+          <rect class="box mem" x="46" y="252" width="168" height="60" rx="7"/>
+          <text class="lbl t-mem" x="130" y="283" text-anchor="middle">寄存器堆 RF</text>
+          <text class="tiny" x="130" y="301" text-anchor="middle">向量 + 张量操作数</text>
+          <rect class="box mem" x="222" y="252" width="130" height="60" rx="7"/>
+          <text class="lbl t-mem" x="287" y="283" text-anchor="middle">URF</text>
+          <text class="tiny" x="287" y="301" text-anchor="middle">uniform 专用</text>
+          <rect class="box mem" x="360" y="252" width="208" height="60" rx="7" style="stroke-width:2.6"/>
+          <text class="lbl t-mem" x="464" y="282" text-anchor="middle">共享内存 / L1</text>
+          <text class="sub t-mem" x="464" y="301" text-anchor="middle">★ 所有执行单元共享</text>
+          <rect class="box mem" x="576" y="252" width="152" height="60" rx="7"/>
+          <text class="lbl t-mem" x="652" y="283" text-anchor="middle">LSU + 异步 copy</text>
+          <text class="tiny" x="652" y="301" text-anchor="middle">TMA / cp.async</text>
+          <!-- out to L2/LPDDR5 -->
+          <path class="edge" d="M652 330 V346"/>
+          <text class="tiny t-mem" x="652" y="360" text-anchor="middle">→ L2 / LPDDR5</text>
+          <!-- note -->
+          <rect class="box" x="34" y="372" width="692" height="44" rx="8"/>
+          <text class="sub" x="380" y="393" text-anchor="middle">几乎不做 FP64 · 大 RF / 缩 L1（参照消费级 Blackwell SM 分区）</text>
+          <text class="tiny" x="380" y="408" text-anchor="middle">SM 硬尺寸（warp×thread、RF/共享内存 KB、阵列 PE 宽 N）为初步提案，待 FPGA 综合验证</text>
+        </svg>
+        <figcaption><b>图 2</b> · SM 内部：调度器驱动 向量 / 标量 / 张量 三通路；三者经 SM 内互连总线共享下方片上存储子系统——RF/URF 供寄存器操作数，<b>共享内存 / L1 由所有执行单元共享</b>（张量 tile 亦经异步 copy 暂存于此），LSU + 异步 copy 桥接 L2/LPDDR5。</figcaption>
+      </figure>
+    </section>
+
+    <!-- 04 SCHEDULING -->
+    <section id="scheduling" class="reveal">
+      <div class="sec-head"><span class="sec-no">04</span><h2>依赖与静态调度</h2><span class="sec-tag">能效差异点</span></div>
+      <p class="sec-intro">curryGPU 在能效维度超过 Vortex/Ventus 的<strong>核心赌注</strong>。GPU 把依赖跟踪交给软件——硬件不做寄存器重命名 / 记分牌 / ROB，省下的逻辑让位给执行单元与寄存器堆。每条指令的控制字段显式编码 RAW/WAR/WAW。</p>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="128 位指令字与控制段编码">
+          <text class="tiny" x="20" y="26">128-bit 定长指令字</text>
+          <!-- full word -->
+          <rect class="box" x="20" y="36" width="560" height="40" rx="6"/>
+          <text class="lbl" x="300" y="61" text-anchor="middle">操作码 + 操作数区　≈107 bit</text>
+          <rect class="box ctl" x="580" y="36" width="160" height="40" rx="6"/>
+          <text class="lbl t-ctl" x="660" y="61" text-anchor="middle">控制段 21 bit</text>
+          <!-- zoom guides -->
+          <path class="edge" d="M580 76 L120 116 M740 76 L740 116" stroke-dasharray="3 3"/>
+          <text class="tiny" x="20" y="112">控制段展开（编译期静态填写）</text>
+          <!-- control fields -->
+          <g>
+            <rect class="box ctl" x="120" y="120" width="118" height="52" rx="6"/><text class="lbl t-ctl" x="179" y="143" text-anchor="middle">stall</text><text class="tiny" x="179" y="160" text-anchor="middle">[4] 0–15 cyc</text>
+            <rect class="box ctl" x="242" y="120" width="60" height="52" rx="6"/><text class="lbl t-ctl" x="272" y="143" text-anchor="middle">yield</text><text class="tiny" x="272" y="160" text-anchor="middle">[1]</text>
+            <rect class="box ctl" x="306" y="120" width="96" height="52" rx="6"/><text class="lbl t-ctl" x="354" y="143" text-anchor="middle">r-bar</text><text class="tiny" x="354" y="160" text-anchor="middle">[3] 读屏障</text>
+            <rect class="box ctl" x="406" y="120" width="96" height="52" rx="6"/><text class="lbl t-ctl" x="454" y="143" text-anchor="middle">w-bar</text><text class="tiny" x="454" y="160" text-anchor="middle">[3] 写屏障</text>
+            <rect class="box ctl" x="506" y="120" width="118" height="52" rx="6"/><text class="lbl t-ctl" x="565" y="143" text-anchor="middle">wait-mask</text><text class="tiny" x="565" y="160" text-anchor="middle">[6] 等待掩码</text>
+            <rect class="box ctl" x="628" y="120" width="112" height="52" rx="6"/><text class="lbl t-ctl" x="684" y="143" text-anchor="middle">reuse</text><text class="tiny" x="684" y="160" text-anchor="middle">[4] 操作数复用</text>
+          </g>
+          <text class="tiny" x="120" y="200">物理 scoreboard：6 个（每个计 0–63 未完成事件）· 3-bit 屏障编号可寻址 8，留余量</text>
+        </svg>
+        <figcaption><b>图 3</b> · 指令字与控制段位布局（数据手册式）——这是 ISA 已锁定的部分；完整 opcode / 操作数编码待 §09 讨论。</figcaption>
+      </figure>
+
+      <h3>管线三分类与 scoreboard</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>管线类</th><th>对象</th><th>依赖处理</th></tr></thead>
+        <tbody>
+          <tr><td><b>coupled</b></td><td>短延迟 math / ALU / FMA</td><td>latency table + 静态填充 + reuse，通常不分配 scoreboard</td></tr>
+          <tr><td><b>redirected</b></td><td>张量等中延迟</td><td>部分 RAW 边界需 scoreboard</td></tr>
+          <tr><td><b>decoupled</b></td><td>LSU / 异步 / barrier</td><td>必须显式 scoreboard 或 depbar</td></tr>
+        </tbody>
+      </table></div>
+      <p>控制字段三分：<code>req_bit_set</code>（consumer 等待）/ <code>src_rel_sb</code>（释放读 scoreboard，处理 WAR）/ <code>dst_wr_sb</code>（产生写 scoreboard，处理 RAW）。编译器流程：def-use → 虚拟 scoreboard web → 剪枝 → 物理 SB 染色 → 写 <code>&amp;WR/&amp;RD/&amp;REQ</code> + wait token。</p>
+      <div class="note"><span class="tag">能效依据 · 实测</span>控制位逻辑面积仅占寄存器堆的 <span class="hl">0.09–0.13%</span>，等效硬件记分牌需 <span class="hl">5.32–7.09%</span>，且静态调度性能更优（记分牌仅 0.97×）。<span style="color:var(--ink-faint)">源：arXiv:2503.20481 / 1804.06826。</span></div>
+    </section>
+
+    <!-- 05 TENSOR -->
+    <section id="tensor" class="reveal">
+      <div class="sec-head"><span class="sec-no">05</span><h2>张量子系统</h2><span class="sec-tag">spatial · low-precision</span></div>
+      <p class="sec-intro">空间脉动阵列：延迟随 tile 增大近恒定、靠<strong>加宽 lane</strong>（而非加深流水）扩吞吐——参照 Blackwell 第五代 Tensor Core 的空间阵列行为。PE 为 DSP-free 融合点积，纯 LUT 实现便于 FPGA 复现。</p>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 320" role="img" aria-label="空间脉动张量阵列">
+          <!-- weights from top -->
+          <text class="sub t-ten" x="60" y="28">权重 ↓</text>
+          <path class="edge-g" d="M120 34 V58 M180 34 V58 M240 34 V58 M300 34 V58"/>
+          <!-- activations from left -->
+          <text class="sub t-vec" x="20" y="160" >激活 →</text>
+          <path class="edge" d="M70 96 H94 M70 150 H94 M70 204 H94"/>
+          <!-- PE grid 4x4 -->
+          <g>
+            <!-- generate 4x4 -->
+            <!-- row coords y:70,124,178,232 ; col x:96,156,216,276 -->
+            <g>
+              <rect class="box ten" x="96" y="68" width="50" height="50" rx="6"/><rect class="box ten" x="156" y="68" width="50" height="50" rx="6"/><rect class="box ten" x="216" y="68" width="50" height="50" rx="6"/><rect class="box ten" x="276" y="68" width="50" height="50" rx="6"/>
+              <rect class="box ten" x="96" y="124" width="50" height="50" rx="6"/><rect class="box ten" x="156" y="124" width="50" height="50" rx="6"/><rect class="box ten" x="216" y="124" width="50" height="50" rx="6"/><rect class="box ten" x="276" y="124" width="50" height="50" rx="6"/>
+              <rect class="box ten" x="96" y="180" width="50" height="50" rx="6"/><rect class="box ten" x="156" y="180" width="50" height="50" rx="6"/><rect class="box ten" x="216" y="180" width="50" height="50" rx="6"/><rect class="box ten" x="276" y="180" width="50" height="50" rx="6"/>
+              <text class="tiny t-ten" x="121" y="98" text-anchor="middle">PE</text><text class="tiny t-ten" x="181" y="98" text-anchor="middle">PE</text><text class="tiny t-ten" x="241" y="98" text-anchor="middle">PE</text><text class="tiny t-ten" x="301" y="98" text-anchor="middle">PE</text>
+            </g>
+          </g>
+          <text class="sub" x="211" y="262" text-anchor="middle">融合点积 PE · 4-cycle · 0 DSP</text>
+          <text class="sub t-ten" x="340" y="160">→ 累加 ↘</text>
+          <!-- precision panel -->
+          <rect class="box" x="430" y="60" width="306" height="190" rx="10"/>
+          <text class="lbl" x="448" y="86">精度与缩放</text>
+          <text class="sub" x="448" y="112">· FP8(E4M3/E5M2) / FP6 / FP4(E2M1)</text>
+          <text class="sub" x="448" y="134">· INT8 / INT4 · FP16/BF16 累加</text>
+          <text class="sub t-ten" x="448" y="160">· 微缩放 MX</text><text class="tiny" x="464" y="176">每 16/32 元素一个块缩放</text>
+          <text class="sub t-ten" x="448" y="200">· NVFP4 两级缩放</text><text class="tiny" x="464" y="216">每16值 E4M3 块 + 每张量 FP32 ≈4.5 bit/值</text>
+          <text class="tiny" x="448" y="238">E4M3(分数) vs E8M0(2 幂) = 精度/面积旋钮</text>
+          <!-- feed -->
+          <rect class="box mem" x="96" y="276" width="230" height="32" rx="7"/><text class="sub t-mem" x="211" y="296" text-anchor="middle">shared 供输入 · 输出 drain 至张量近存</text>
+          <path class="edge" d="M211 276 V250" stroke-dasharray="3 3"/>
+        </svg>
+        <figcaption><b>图 4</b> · 空间脉动阵列 + DSP-free PE + 低精度/微缩放；输入自 shared（TMA 在 global↔shared 搬运）、累加/输出 drain 至张量近存（数据流见 <a href="isa.html#tensorflow">ISA §05</a>）。Ten-Four 已证 DSP-free 张量核即达 134 GFLOPS/核 / 0 DSP。</figcaption>
+      </figure>
+      <p>张量指令族为<strong>独立资源域</strong>（类 HMMA/IMMA/QMMA/OMMA），shape 字段化、跨 group 完成，异步发射 + group scoreboard（commit_group / wait_group）收尾。</p>
+    </section>
+
+    <!-- 06 TOOLCHAIN -->
+    <section id="toolchain" class="reveal">
+      <div class="sec-head"><span class="sec-no">06</span><h2>工具链</h2><span class="sec-tag">PTX-in / SASS-out</span></div>
+      <p class="sec-intro">clean-slate 只在<strong>硬件 ISA 层</strong>，编译器层站在成熟前端上：复用 NV 前端，curryGPU 作为新后端目标（类比"为这套编译器加一代新架构"）。拿到 PTX 级 CUDA 生态兼容 + 现成静态调度生成器，把工具链风险降到最低。</p>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 196" role="img" aria-label="编译器工具链流水">
+          <text class="tiny" x="20" y="24">复用（成熟前端）</text>
+          <text class="tiny t-vec" x="470" y="24">新增（curryGPU 后端）</text>
+          <rect class="box" x="20" y="38" width="120" height="48" rx="8"/><text class="lbl" x="80" y="60" text-anchor="middle">CUDA C</text><text class="sub" x="80" y="76" text-anchor="middle">/ PTX</text>
+          <rect class="box" x="170" y="38" width="130" height="48" rx="8"/><text class="lbl" x="235" y="60" text-anchor="middle">nvcc / cicc</text><text class="sub" x="235" y="76" text-anchor="middle">前端</text>
+          <rect class="box" x="330" y="38" width="130" height="48" rx="8"/><text class="lbl" x="395" y="60" text-anchor="middle">NVVM / PTX</text><text class="sub" x="395" y="76" text-anchor="middle">IR + ptxopt</text>
+          <!-- new backend -->
+          <rect class="box vec" x="490" y="30" width="250" height="120" rx="10"/>
+          <text class="lbl t-vec" x="615" y="54" text-anchor="middle">curryGPU 后端</text>
+          <text class="sub" x="615" y="76" text-anchor="middle">机器模型（latency/hazard）</text>
+          <text class="sub" x="615" y="96" text-anchor="middle">静态调度 + scoreboard 生成</text>
+          <text class="sub" x="615" y="116" text-anchor="middle">ucode 编码器 · validator</text>
+          <text class="sub" x="615" y="136" text-anchor="middle">反汇编器（共享 schema）</text>
+          <rect class="box ten" x="540" y="162" width="200" height="30" rx="7"/><text class="lbl t-ten" x="640" y="182" text-anchor="middle">curryGPU SASS · 128-bit</text>
+          <!-- edges -->
+          <path class="edge" d="M140 62 H170 M300 62 H330 M460 62 H490"/>
+          <path class="edge-g" d="M615 150 V162"/>
+          <marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--ink-faint)"/></marker>
+        </svg>
+        <figcaption><b>图 5</b> · 复用前端（灰）+ 新增 curryGPU 后端（金）。静态调度生成器有生产级参考实现可循。</figcaption>
+      </figure>
+      <div class="note"><span class="tag">开源化注记</span>研究/复现阶段可直接参照成熟编译器；若将来要做纯开源可流片工具链，外部派生部分需 clean reimplementation——自有的指令 schema 与设计知识可复用。</div>
+    </section>
+
+    <!-- 07 TARGETS -->
+    <section id="targets" class="reveal">
+      <div class="sec-head"><span class="sec-no">07</span><h2>对标与目标带</h2><span class="sec-tag">benchmarks</span></div>
+      <div class="warn"><span class="tag">口径约定</span>NVIDIA 标称 AI TOPS <b>内嵌 2:1 结构化稀疏的 2× 翻倍</b>，对标必须<b>折半还原稠密</b>；NVIDIA 自身脚注确认 <b>FP8 TFLOPs ≡ INT8 TOPs</b>。Jetson 数为理论稠密峰值（实测约 57%），功耗为模组级 TMP（含 CPU/DLA/内存），非 GPU-only。</div>
+
+      <div class="note"><span class="tag">关键 · 数据现实</span>Vortex 与 Ventus 的论文<b>都未在同一配置下同时给出吞吐 + 资源 + 功耗</b>，因此<b>无法从公开数据算出它们的 GFLOPS/kLUT 或 TOPS/W</b>——能效横向对比<b>必须自行复现其 RTL、在 curryGPU 同一平台上实测</b>。唯一有坚实面积效率代理的是 Ten-Four。</div>
+
+      <h3>① 开源基线与可用能效代理</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>设计</th><th>平台</th><th>频率</th><th>面积</th><th>吞吐 / 能效代理</th></tr></thead>
+        <tbody>
+          <tr><td><b>Ten-Four</b> 张量核 N=32</td><td>Alveo U55C</td><td class="num">262 MHz</td><td class="num">188K LUT · 0 DSP</td><td>134 GFLOPS/核（理想满流水）→ <b>~0.714 GFLOPS/kLUT</b>；FP8/INT4 + MX</td></tr>
+          <tr><td>Vortex 4W-4T 单核</td><td>Stratix10/Arria10</td><td class="num">233 MHz</td><td class="num">21.5K LUT</td><td>无配对吞吐；MICRO21 另有 15nm ASIC 46.8mW 能耗代理</td></tr>
+          <tr><td>Ventus/乘影（VCU128 原型）</td><td>VCU128</td><td class="num">100 MHz</td><td class="num">11% 面积</td><td>3.2 GFLOPS FP32（唯一可用实测点；16SM 旗舰受片间延迟限 ~10MHz）</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>② 真实硅能效参照（取自 Vortex/Ventus 家族之外）</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>参照</th><th>工艺</th><th>能效</th><th>口径</th></tr></thead>
+        <tbody>
+          <tr><td><b>MXDOTP</b>（ETH, 8 核 Snitch）</td><td class="num">12nm</td><td><b>0.356 TFLOPS/W</b>（102 GFLOPS）</td><td>MXFP8 · 0.8V/1GHz · 达理想 79.7%</td></tr>
+          <tr><td>e-GPU（EPFL, Vortex 派生）</td><td class="num">TSMC 16nm</td><td><b>&lt;28mW</b> 包络</td><td>纯整数 TinyAI · 0.24–0.38mm² · 无绝对吞吐</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>③ 商业上限锚（ASIC，稠密口径 · 仅作方向，非验收线）</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>模组</th><th>GPU 配置</th><th>功耗</th><th>稠密能效</th></tr></thead>
+        <tbody>
+          <tr><td>Orin NX 16GB</td><td>1024 CUDA + 32 TC</td><td class="num">25W</td><td><b>2.0 稠密 INT8 TOPS/W</b>（下限锚）</td></tr>
+          <tr><td>AGX Orin 64GB</td><td>2048 CUDA + 64 TC @1.3GHz</td><td class="num">—</td><td>GPU 段 85 稠密 INT8 TOPS</td></tr>
+          <tr><td>Thor T5000</td><td>2560 CUDA + 96 五代 TC</td><td class="num">130W</td><td><b>8.0 稠密 FP4 / 4.0 稠密 INT8 TOPS/W</b>（激进上限锚）</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>④ curryGPU 三条验收门槛</h3>
+      <ul class="clean">
+        <li><b>面积效率（FPGA · 主验收轴）<span class="chip prov">provisional</span></b>：同织构 FPGA 上 <span class="hl">超过 Ten-Four ~0.714 GFLOPS/kLUT</span>——唯一有坚实公开基线的轴。凭 DSP-free + FP4/MX（每 LUT 有效 op 更高）目标拉开 <span class="hl">≥2× 余量</span>；具体倍数待 RTL 综合证实。</li>
+        <li><b>峰值算力 + 对 Vortex/Ventus 横向（FPGA）<span class="chip prov">provisional</span></b>：因二者无公开配对数据，<span class="hl">以自行复现其 RTL、同平台实测为准</span>；暂以文档锚点（Vortex 21.5K LUT@233MHz；Ventus 3.2 GFLOPS@100MHz/11%）为对照。</li>
+        <li><b>能效（流片态）</b>：无 Vortex/Ventus 硅基 TOPS/W 可比 → 目标 <span class="hl">超过 MXDOTP 0.356 TFLOPS/W</span>，并落在 e-GPU <span class="hl">&lt;28mW</span>(16nm) 包络内；方向锚 Orin NX ~2 → Thor ~8 稠密 TOPS/W。</li>
+      </ul>
+      <p style="color:var(--ink-faint);font-size:13px">注：Ten-Four 的 134 GFLOPS 是理想满流水综合值（非实测 kernel），0.714 GFLOPS/kLUT 应视作理论峰值上限；跨 FPGA 织构（Intel ALM vs Xilinx 6-LUT）的 GFLOPS/kLUT 不严格 1:1。</p>
+    </section>
+
+    <!-- 08 BORROW -->
+    <section id="borrow" class="reveal">
+      <div class="sec-head"><span class="sec-no">08</span><h2>借鉴来源</h2><span class="sec-tag">下放清单</span></div>
+      <p class="sec-intro">从 Blackwell/Hopper <strong>可下放到端侧</strong>的部分（均经多源对抗校验）。跨代依赖建模演进作为 ISA 参照：Volta（软件管理依赖系统化）→ Turing（uniform 路径）→ Ampere（异步内存）→ Hopper（异步张量 + warpgroup + fence）→ Blackwell（张量内存 + 新 MMA 通路）。</p>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>借鉴</th><th>要点</th></tr></thead>
+        <tbody>
+          <tr><td><b>低精度张量通路</b></td><td>FP4≈2×FP8≈4×FP16，靠加宽而非加深扩吞吐</td></tr>
+          <tr><td><b>微缩放 MX / NVFP4</b></td><td>极小硬件换 4-bit 可用精度</td></tr>
+          <tr><td><b>静态调度控制位</b></td><td>能效最高杠杆（面积 0.09–0.13% vs 记分牌 5.32–7.09%）</td></tr>
+          <tr><td><b>空间脉动张量阵列</b></td><td>近常数延迟、加宽扩吞吐</td></tr>
+          <tr><td><b>异步供数</b></td><td>TMA 式 + cp.async 式，张量满吞吐必需</td></tr>
+          <tr><td><b>uniform 数据通路</b></td><td>warp 内标量/地址计算卸出向量通路</td></tr>
+          <tr><td><b>SM 分区参照</b></td><td>大 RF、缩 L1、几乎不做 FP64</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <!-- 09 ISA -->
+    <section id="isa" class="reveal">
+      <div class="sec-head"><span class="sec-no">09</span><h2>ISA 与编码</h2><span class="chip lock" style="margin-left:14px">指令集定稿</span><span class="sec-tag">→ isa.html</span></div>
+      <p class="sec-intro">ISA 信息密度最高，已<strong>独立成文档</strong>：<a href="isa.html"><b>docs/design/isa.html</b></a>。策略为<strong>借模型·定制编码</strong>——采用 NV 五层 instruction-class schema 与 21-bit 控制段语义，opcode 编号与位布局全部自定义。<strong>ISA 主体已成稿</strong>——骨架、全指令族（计算 / 访存 / 张量低精度 / 控制同步 uniform）与编码定稿，要点如下。</p>
+      <ul class="clean">
+        <li><b>指令字</b>：128-bit 定长，控制段 21 + guard 4 + opcode ≈12 + 载荷 ≈91（含 descriptor/TMEM 变体）。</li>
+        <li><b>操作数</b>：GPR(8-bit)/URF/谓词 P·UP/SR/<code>c[bank][off]</code>/descriptor/TMEM-addr；6 地址空间（新增张量近存 <code>tensor-mem</code>）。</li>
+        <li><b>依赖</b>：6 物理 scoreboard，coupled/decoupled，virtual queue 资源域全定义并实现 <code>math·AGU·SFU·MMA·TMA·XLANE·CBU·fence</code>。</li>
+        <li><b>分歧</b>：独立线程调度 ITS（每 lane 独立 PC + 收敛屏障）；warp=32 锁定。</li>
+        <li><b>张量数据流</b>：TMA 在 global↔shared 供数；脉动阵列 PE 内累加、drain 到张量近存（见 <a href="isa.html#tensorflow">ISA §05</a>）。</li>
+        <li><b>计算类</b>：正交母机（IADD3/IMAD/LOP3/SHF/ISETP）+ modifier/LUT 合成；低精度 pack/cvt（F2FP/F2SF）+ INT8 点积 IDP4A；SFU 独立 decoupled 域（见 <a href="isa.html#compute">ISA §07</a>）。</li>
+        <li><b>访存类</b>：三档搬运（同步 LD/ST · 异步 CPY · TMA bulk）+ mbarrier 跨 warp 完成；地址空间作 operand 类型（见 <a href="isa.html#memory">ISA §08</a>）。</li>
+        <li><b>张量 + 低精度</b>：单 MMA 母机（<code>.kind/.shape/idesc</code>）+ 张量近存 <code>LDT/STT</code>；block-scale 闭合 MX/NVFP4 量化链（见 <a href="isa.html#tensor">ISA §09</a>）。</li>
+        <li><b>控制 / 同步 / uniform</b>：收敛屏障 + 屏障 / warp 协作（<code>amax=REDUX.FMAX.ABS</code>）+ uniform 通路；cross-lane 规范名归一（见 <a href="isa.html#control">ISA §10</a>）。</li>
+        <li><b>编码定稿</b>：91-bit 载荷单字够用（最紧 TMA 5D 余 16-bit）；relocation 保护控制段静态调度契约（见 <a href="isa.html#encoding">ISA §11</a>）。</li>
+      </ul>
+    </section>
+
+    <!-- 10 RISKS -->
+    <section id="risks" class="reveal">
+      <div class="sec-head"><span class="sec-no">10</span><h2>风险与未决项</h2><span class="sec-tag">open items</span></div>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>项</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td>开源基线定量门槛</td><td><b>部分确立</b>：面积效率以 Ten-Four 0.714 GFLOPS/kLUT 为门槛、流片能效以 MXDOTP 0.356 TFLOPS/W 为参照；Vortex/Ventus 无公开配对数据，正式横向须自行复现 RTL 实测</td></tr>
+          <tr><td>SM 硬尺寸（warp×thread、RF/共享内存 KB、阵列 PE 宽 N）</td><td>初步提案（4–8 warp×32、RF 64–128KB、L1 64–128KB、N=16/32），待 FPGA 综合验证</td></tr>
+          <tr><td>DSP-free 低精度脉动阵列在 FPGA 的 Fmax / 每 kLUT 算力</td><td>无数据，决定 FPGA 验证态目标可达性</td></tr>
+          <tr><td>NVFP4/MX 扣除缩放开销后相对 INT8 的净能效增益</td><td>无可引用量化结果</td></tr>
+          <tr><td>ISA 明细（opcode / divergence / 调度器策略）</td><td>指令集已定稿（骨架 + 全指令族 + 编码，<a href="isa.html">isa.html</a>）；精确位偏移与 latency 标定待 uarch 协同</td></tr>
+          <tr><td>外部派生工具链的开源化清理</td><td>长期项</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <!-- 11 ROADMAP -->
+    <section id="roadmap" class="reveal">
+      <div class="sec-head"><span class="sec-no">11</span><h2>文档路线图</h2><span class="sec-tag">docs/design/ 框架</span></div>
+      <p class="sec-intro">本文档（<code>docs/design/index.html</code>）是设计文档框架的入口。各模块状态如下；随实现推进，重模块可拆为独立 HTML 文档放入同目录。决策过程、备选与权衡另存于内部决策档案。</p>
+      <div class="road">
+        <div class="row"><span class="rn">01–08</span><span class="rt">架构骨架<small>概览 / 契约 / 架构 / 调度 / 张量 / 工具链 / 对标 / 借鉴</small></span><span class="chip lock">已定 · 自洽</span></div>
+        <div class="row"><span class="rn">07</span><span class="rt">对标量化门槛<small>开源横向对比的精确倍数</small></span><span class="chip prov">部分确立 · 待自测</span></div>
+        <div class="row"><span class="rn">09</span><span class="rt">ISA 与编码 → <a href="isa.html">isa.html</a><small>骨架 + 全指令族 + 编码已定稿</small></span><span class="chip lock">指令集定稿</span></div>
+        <div class="row"><span class="rn">12</span><span class="rt">实现<small>张量阵列 RTL · 编译器后端 · SM 集成</small></span><span class="chip todo">未启动</span></div>
+      </div>
+    </section>
+
+    <!-- 12 SOURCES -->
+    <section id="sources" class="reveal" style="border-bottom:none">
+      <div class="sec-head"><span class="sec-no">12</span><h2>参考信源</h2><span class="sec-tag">带口径</span></div>
+      <div class="src">
+        <div class="grp"><h4>Blackwell / Hopper 微架构</h4>
+          <div>B200 微基准实测峰值与延迟 · arXiv:2512.02189</div>
+          <div>RTX Blackwell 白皮书（SM 分区 / 消费级低精度）</div>
+          <div>NVFP4 格式与两级缩放 · NVIDIA 开发者博客</div>
+          <div>Hopper 架构（TMA/cluster/wgmma）· arXiv:2501.12084</div>
+        </div>
+        <div class="grp"><h4>SASS 静态调度控制位</h4>
+          <div>控制位面积/能效对比 · arXiv:2503.20481（UPC）</div>
+          <div>Volta 控制字布局 · arXiv:1804.06826（Citadel）</div>
+          <div>SM90 SASS ISA bit 级编码（kuterdinel.com/nv_isa，812 页）</div>
+        </div>
+        <div class="grp"><h4>开源 GPGPU 基线</h4>
+          <div>Vortex · MICRO 2021（Table 3 面积 + 15nm 46.8mW）；Skybox · ASPLOS 2023</div>
+          <div>Ten-Four（DSP-free 张量核 + MX）· arXiv:2512.00053（Table I → 0.714 GFLOPS/kLUT）</div>
+          <div>Ventus/乘影 · ICCD 2024 / TVLSI 2025；VCU128 3.2 GFLOPS · RISC-V Summit EU 2023</div>
+          <div>tensor-in-Vortex + cooperative warp · HPCA 2025；Virgo · arXiv:2408.12073</div>
+        </div>
+        <div class="grp"><h4>真实硅能效参照（家族外）</h4>
+          <div>MXDOTP（ETH Snitch，12nm，0.356 TFLOPS/W）· arXiv:2505.13159</div>
+          <div>e-GPU（EPFL，16nm，&lt;28mW）· arXiv:2505.08421</div>
+        </div>
+        <div class="grp"><h4>Jetson 目标带（官方 datasheet，2026-02）</h4>
+          <div>AGX Orin 技术简报 v1.2；Orin NX DS-10712-001 v1.7</div>
+          <div>Thor 系列模组 DS-11945-001 v1.4</div>
+        </div>
+        <div class="grp"><h4>编译器栈与指令设计方法论</h4>
+          <div>本地 CUDA 编译器源码树文档（指令 schema / 依赖·scoreboard / 逐代特化）</div>
+        </div>
+      </div>
+      <footer class="foot">
+        curryGPU · 端侧 GPGPU 设计文档 · 2026-05<br>
+        <b>调研溯源</b>：4 轮深度调研 / 累计 527 个 subagent / ~90 信源 · 所有量化结论经三票对抗式校验，证据强弱与被否决项均已标注。<br>
+        <b>状态</b>：架构骨架（8 决策）与 ISA 均已定稿、自洽；RTL 实现与 uarch 标定为后续工作。
+      </footer>
+    </section>
+
+  </main>
+</div>
+
+<script>
+// scrollspy
+const links=[...document.querySelectorAll('.nav a')];
+const map=new Map(links.map(a=>[a.getAttribute('href').slice(1),a]));
+const spy=new IntersectionObserver((es)=>{
+  es.forEach(e=>{ if(e.isIntersecting){ links.forEach(l=>l.classList.remove('active')); const a=map.get(e.target.id); if(a)a.classList.add('active'); }});
+},{rootMargin:'-12% 0px -78% 0px'});
+document.querySelectorAll('section[id]').forEach(s=>spy.observe(s));
+// reveal on load + scroll
+const rev=new IntersectionObserver((es)=>{
+  es.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('in'); rev.unobserve(e.target);} });
+},{rootMargin:'0px 0px -8% 0px'});
+document.querySelectorAll('.reveal').forEach((el,i)=>{ el.style.transitionDelay=(Math.min(i,3)*60)+'ms'; rev.observe(el); });
+</script>
+</body>
+</html>
