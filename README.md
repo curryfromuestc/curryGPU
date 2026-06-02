@@ -1,6 +1,6 @@
 # curryGPU
 
-端侧 GPGPU 设计文档 —— 借鉴 NVIDIA Blackwell 的先进机制，目标在能效与峰值性能上超越开源 RISC-V GPGPU。
+端侧 GPGPU —— 借鉴 NVIDIA Blackwell 的先进机制，目标在能效与峰值性能上超越开源 RISC-V GPGPU。
 
 **在线文档（GitHub Pages）**：https://curryfromuestc.github.io/curryGPU/
 
