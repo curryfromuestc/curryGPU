@@ -171,6 +171,16 @@ footer.foot b{color:var(--ink-dim)}
   .nav{flex-direction:row;flex-wrap:wrap}.rail-stat{display:none}
   main{padding:0 22px 80px}.hero h1{font-size:38px}.src{columns:1}
 }
+
+/* ---------- doc switcher ---------- */
+.docnav{display:flex;flex-direction:column;gap:6px;margin:2px 0 20px;padding-bottom:18px;border-bottom:1px solid var(--line)}
+.docnav .dl{font-family:var(--font-mono);font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--ink-faint);margin-bottom:2px}
+.docnav a{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:12px;color:var(--ink-dim);border:1px solid var(--line-2);border-radius:7px;padding:7px 11px;transition:.18s}
+.docnav a .ar{color:var(--ink-faint);width:10px;display:inline-block}
+.docnav a:hover{border-color:var(--gold);color:var(--gold-2)}
+.docnav a:hover .ar{color:var(--gold)}
+.docnav a.cur{background:var(--gold-soft);color:var(--gold-2);border-color:rgba(244,183,64,.32);cursor:default}
+.docnav a.cur .ar{color:var(--gold)}
 </style>
 </head>
 <body>
@@ -180,6 +190,12 @@ footer.foot b{color:var(--ink-dim)}
   <aside class="sidebar">
     <div class="brand"><span class="logo">curry<b>GPU</b></span></div>
     <div class="brand-sub">端侧 GPGPU · 设计文档</div>
+    <div class="docnav">
+      <span class="dl">设计文档</span>
+      <a class="cur" href="index.html"><span class="ar">▸</span>总览 · index.html</a>
+      <a href="isa.html"><span class="ar">→</span>ISA 与编码 · isa.html</a>
+      <a href="iss.html"><span class="ar">→</span>功能级 ISS · iss.html</a>
+    </div>
     <nav><ul class="nav">
       <li><a href="#overview"><span class="ix">01</span>概览</a></li>
       <li><a href="#contract"><span class="ix">02</span>设计契约</a></li>
