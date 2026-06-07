@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>curryGPU · 功能级 ISS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0f14; --bg-2:#0e141b; --bg-3:#141c26; --bg-4:#1a2430;
+  --line:#23303f; --line-2:#2e3e50;
+  --ink:#e7eef5; --ink-dim:#9fb0c0; --ink-faint:#62748a;
+  --gold:#f4b740; --gold-2:#ffd27a; --gold-soft:rgba(244,183,64,.12);
+  --cyan:#48cbe0; --lime:#9bd84e; --blue:#5e9be6; --pink:#ec6fa6; --red:#ef6f6f;
+  --font-body:"IBM Plex Sans","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+  --font-mono:"IBM Plex Mono","Cascadia Code",ui-monospace,monospace;
+  --font-disp:"Chakra Petch","IBM Plex Sans","Noto Sans SC",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg); color:var(--ink); font-family:var(--font-body);
+  font-size:15.5px; line-height:1.72; -webkit-font-smoothing:antialiased;
+  background-image:
+    radial-gradient(900px 500px at 82% -8%, rgba(244,183,64,.07), transparent 60%),
+    radial-gradient(700px 600px at 0% 100%, rgba(72,203,224,.05), transparent 55%),
+    linear-gradient(transparent 95%, rgba(255,255,255,.02) 95%),
+    linear-gradient(90deg, transparent 95%, rgba(255,255,255,.02) 95%);
+  background-size:auto,auto,28px 28px,28px 28px;
+}
+::selection{background:var(--gold);color:#1a1206}
+a{color:var(--gold-2);text-decoration:none}
+.layout{display:grid;grid-template-columns:264px minmax(0,1fr);max-width:1320px;margin:0 auto}
+
+/* ---------- sidebar ---------- */
+.sidebar{
+  position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;
+  background:linear-gradient(180deg,var(--bg-2),var(--bg));
+  border-right:1px solid var(--line);padding:30px 22px 40px;
+}
+.brand{display:flex;align-items:baseline;gap:9px;margin-bottom:4px}
+.brand .logo{font-family:var(--font-disp);font-weight:700;font-size:26px;letter-spacing:.5px;color:var(--ink)}
+.brand .logo b{color:var(--gold)}
+.brand .v{font-family:var(--font-mono);font-size:11px;color:var(--ink-faint);border:1px solid var(--line-2);padding:1px 6px;border-radius:5px}
+.brand-sub{font-family:var(--font-mono);font-size:11px;color:var(--ink-faint);margin-bottom:18px;letter-spacing:.3px}
+.back{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:11.5px;color:var(--ink-dim);border:1px solid var(--line-2);border-radius:7px;padding:6px 10px;margin-bottom:22px;transition:.18s}
+.back:hover{border-color:var(--gold);color:var(--gold-2)}
+.nav{list-style:none;display:flex;flex-direction:column;gap:1px}
+.nav a{
+  display:flex;align-items:center;gap:11px;color:var(--ink-dim);font-size:13.5px;
+  padding:7px 11px;border-radius:7px;border-left:2px solid transparent;transition:.18s;
+}
+.nav a .ix{font-family:var(--font-mono);font-size:10.5px;color:var(--ink-faint);width:16px}
+.nav a:hover{background:var(--bg-3);color:var(--ink)}
+.nav a.active{background:var(--gold-soft);color:var(--gold-2);border-left-color:var(--gold)}
+.nav a.active .ix{color:var(--gold)}
+.rail-stat{margin-top:26px;padding-top:18px;border-top:1px solid var(--line);font-family:var(--font-mono);font-size:11px;color:var(--ink-faint);line-height:1.9}
+.rail-stat b{color:var(--cyan)}
+
+/* ---------- main ---------- */
+main{padding:0 56px 120px;min-width:0}
+.hero{padding:64px 0 38px;border-bottom:1px solid var(--line)}
+.eyebrow{font-family:var(--font-mono);font-size:12px;letter-spacing:3px;text-transform:uppercase;color:var(--gold);margin-bottom:18px}
+.hero h1{font-family:var(--font-disp);font-weight:700;font-size:54px;line-height:1.04;letter-spacing:-.5px;margin-bottom:18px}
+.hero h1 .accent{color:var(--gold)}
+.lede{font-size:18px;color:var(--ink-dim);max-width:64ch;margin-bottom:26px}
+.lede b{color:var(--ink);font-weight:600}
+.badges{display:flex;flex-wrap:wrap;gap:9px}
+.badge{font-family:var(--font-mono);font-size:11.5px;padding:5px 11px;border-radius:20px;border:1px solid var(--line-2);color:var(--ink-dim);display:inline-flex;gap:7px;align-items:center}
+.badge .dot{width:6px;height:6px;border-radius:50%;background:var(--gold)}
+.badge.cy .dot{background:var(--cyan)} .badge.li .dot{background:var(--lime)} .badge.pk .dot{background:var(--pink)}
+
+section{padding:54px 0;border-bottom:1px solid var(--line);scroll-margin-top:20px}
+.sec-head{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+.sec-no{font-family:var(--font-mono);font-size:13px;color:var(--gold);border:1px solid var(--line-2);background:var(--gold-soft);padding:3px 9px;border-radius:6px}
+h2{font-family:var(--font-disp);font-weight:600;font-size:30px;letter-spacing:-.2px}
+.sec-tag{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--ink-faint)}
+.sec-intro{color:var(--ink-dim);max-width:74ch;margin:14px 0 26px}
+h3{font-family:var(--font-disp);font-weight:600;font-size:18px;margin:30px 0 12px;color:var(--ink)}
+p{margin:11px 0;max-width:78ch}
+strong{color:var(--ink);font-weight:600}
+.hl{color:var(--gold-2);font-weight:600}
+code,kbd{font-family:var(--font-mono);font-size:.88em;background:var(--bg-3);border:1px solid var(--line);padding:1px 6px;border-radius:5px;color:var(--gold-2)}
+
+/* ---------- pills / legend ---------- */
+.legend{display:flex;flex-wrap:wrap;gap:16px;margin:6px 0 20px;font-family:var(--font-mono);font-size:11.5px;color:var(--ink-dim)}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.legend i{width:11px;height:11px;border-radius:3px;display:inline-block}
+.sw-vec{background:var(--gold)} .sw-uni{background:var(--cyan)} .sw-ten{background:var(--lime)} .sw-mem{background:var(--blue)} .sw-ctl{background:var(--pink)} .sw-red{background:var(--red)}
+
+/* ---------- figure ---------- */
+figure{margin:20px 0 6px;background:var(--bg-2);border:1px solid var(--line);border-radius:14px;padding:24px 22px 14px;overflow:hidden}
+figure svg{display:block;width:100%;height:auto}
+figcaption{font-family:var(--font-mono);font-size:11.5px;color:var(--ink-faint);margin-top:12px;padding-top:11px;border-top:1px solid var(--line);letter-spacing:.2px}
+figcaption b{color:var(--ink-dim);font-weight:500}
+
+/* svg shared */
+.dgm .box{fill:var(--bg-3);stroke:var(--line-2);stroke-width:1.4}
+.dgm .lbl{fill:var(--ink);font:600 13px var(--font-mono)}
+.dgm .lblg{fill:var(--gold-2);font:600 13px var(--font-mono)}
+.dgm .sub{fill:var(--ink-dim);font:400 10.5px var(--font-mono)}
+.dgm .tiny{fill:var(--ink-faint);font:400 9.5px var(--font-mono)}
+.dgm .vec{fill:rgba(244,183,64,.13);stroke:var(--gold)} .dgm .t-vec{fill:var(--gold)}
+.dgm .uni{fill:rgba(72,203,224,.13);stroke:var(--cyan)} .dgm .t-uni{fill:var(--cyan)}
+.dgm .ten{fill:rgba(155,216,78,.13);stroke:var(--lime)} .dgm .t-ten{fill:var(--lime)}
+.dgm .mem{fill:rgba(94,155,230,.13);stroke:var(--blue)} .dgm .t-mem{fill:var(--blue)}
+.dgm .ctl{fill:rgba(236,111,166,.13);stroke:var(--pink)} .dgm .t-ctl{fill:var(--pink)}
+.dgm .red{fill:rgba(239,111,111,.13);stroke:var(--red)} .dgm .t-red{fill:var(--red)}
+.dgm .resv{fill:none;stroke:var(--ink-faint);stroke-width:1.3;stroke-dasharray:4 3}
+.dgm .edge{stroke:var(--ink-faint);stroke-width:1.5;fill:none}
+.dgm .edge-g{stroke:var(--gold);stroke-width:1.6;fill:none;opacity:.85}
+.dgm .edge-c{stroke:var(--cyan);stroke-width:1.6;fill:none;opacity:.85}
+.dgm .edge-l{stroke:var(--lime);stroke-width:1.6;fill:none;opacity:.85}
+.dgm .edge-p{stroke:var(--pink);stroke-width:1.6;fill:none;opacity:.85}
+.dgm .edge-r{stroke:var(--red);stroke-width:1.6;fill:none;opacity:.85}
+
+/* ---------- tables ---------- */
+.tbl{width:100%;border-collapse:collapse;margin:18px 0;font-size:13.5px}
+.tbl th,.tbl td{text-align:left;padding:10px 13px;border-bottom:1px solid var(--line);vertical-align:top}
+.tbl thead th{font-family:var(--font-mono);font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--ink-faint);background:var(--bg-2);border-bottom:1px solid var(--line-2)}
+.tbl tbody tr:hover{background:var(--bg-2)}
+.tbl td b{color:var(--gold-2)}
+.tbl .num{font-family:var(--font-mono);color:var(--cyan);white-space:nowrap}
+.tbl .mono{font-family:var(--font-mono);font-size:12.5px;color:var(--ink-dim)}
+.tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+.tbl-wrap .tbl{margin:0}
+
+/* ---------- callout ---------- */
+.note{border-left:3px solid var(--blue);background:rgba(94,155,230,.07);padding:14px 18px;border-radius:0 10px 10px 0;margin:18px 0;font-size:14px;color:var(--ink-dim)}
+.note b{color:var(--ink)}
+.note .tag{font-family:var(--font-mono);font-size:11px;letter-spacing:.5px;text-transform:uppercase;display:block;margin-bottom:5px;color:var(--blue)}
+.note.gold{border-left-color:var(--gold);background:var(--gold-soft)}.note.gold .tag{color:var(--gold)}
+.note.pink{border-left-color:var(--pink);background:rgba(236,111,166,.07)}.note.pink .tag{color:var(--pink)}
+
+/* ---------- list ---------- */
+ul.clean{list-style:none;margin:12px 0;display:flex;flex-direction:column;gap:9px}
+ul.clean li{padding-left:22px;position:relative;color:var(--ink-dim);max-width:80ch}
+ul.clean li::before{content:"▹";position:absolute;left:2px;color:var(--gold);font-size:13px}
+ul.clean li b{color:var(--ink)}
+
+/* status chips */
+.chip{font-family:var(--font-mono);font-size:10.5px;padding:2px 8px;border-radius:12px;white-space:nowrap}
+.chip.lock{background:rgba(155,216,78,.13);color:var(--lime);border:1px solid rgba(155,216,78,.3)}
+.chip.next{background:var(--gold-soft);color:var(--gold-2);border:1px solid rgba(244,183,64,.3)}
+.chip.todo{background:rgba(236,111,166,.1);color:var(--pink);border:1px solid rgba(236,111,166,.28)}
+.chip.resv{background:rgba(98,116,138,.12);color:var(--ink-faint);border:1px solid var(--line-2)}
+
+/* roadmap */
+.road{display:flex;flex-direction:column;gap:2px;margin-top:10px}
+.road .row{display:grid;grid-template-columns:42px 1fr auto;gap:14px;align-items:center;padding:11px 14px;border:1px solid var(--line);border-radius:9px;background:var(--bg-2)}
+.road .row .rn{font-family:var(--font-mono);font-size:13px;color:var(--ink-faint);text-align:center}
+.road .row .rt{font-weight:600;font-size:14px}
+.road .row .rt small{display:block;font-weight:400;font-size:12px;color:var(--ink-faint)}
+
+/* ---------- ISS additions ---------- */
+pre.code{font-family:var(--font-mono);font-size:12.5px;line-height:1.65;background:var(--bg-2);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:18px 0;overflow-x:auto;color:var(--ink-dim);white-space:pre}
+pre.code .k{color:var(--pink)} pre.code .c{color:var(--ink-faint)} pre.code .r{color:var(--gold-2)} pre.code .n{color:var(--cyan)} pre.code .g{color:var(--lime)}
+.lanes{display:flex;flex-wrap:wrap;gap:3px;margin:12px 0;font-family:var(--font-mono);align-items:center}
+.lane{width:21px;height:21px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:9px;border:1px solid var(--line-2);background:var(--bg-3);color:var(--ink-faint)}
+.lane.on{background:rgba(244,183,64,.18);border-color:var(--gold);color:var(--gold-2)}
+.lane.blk{background:rgba(236,111,166,.16);border-color:var(--pink);color:var(--pink)}
+.lane.b{background:rgba(94,155,230,.16);border-color:var(--blue);color:var(--blue)}
+.lane.exit{background:rgba(98,116,138,.08);color:var(--ink-faint);border-style:dashed}
+.lane-note{font-family:var(--font-mono);font-size:11px;color:var(--ink-faint);margin-left:10px}
+.lane-cap{font-family:var(--font-mono);font-size:11px;color:var(--ink-faint);margin:14px 0 2px;display:block}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:14px 0}
+@media(max-width:760px){.two{grid-template-columns:1fr}}
+.def{display:grid;grid-template-columns:120px 1fr;gap:6px 16px;margin:14px 0;font-size:14px}
+.def dt{font-family:var(--font-mono);font-size:12.5px;color:var(--gold-2)}
+.def dd{color:var(--ink-dim);max-width:74ch}
+
+footer.foot{padding:40px 0 0;color:var(--ink-faint);font-family:var(--font-mono);font-size:12px;line-height:1.9}
+footer.foot b{color:var(--ink-dim)}
+
+.reveal{opacity:0;transform:translateY(14px);transition:opacity .6s ease,transform .6s ease}
+.reveal.in{opacity:1;transform:none}
+
+@media(max-width:920px){
+  .layout{grid-template-columns:1fr}
+  .sidebar{position:static;height:auto;border-right:none;border-bottom:1px solid var(--line)}
+  .nav{flex-direction:row;flex-wrap:wrap}.rail-stat{display:none}
+  main{padding:0 22px 80px}.hero h1{font-size:38px}
+}
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ================= SIDEBAR ================= -->
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">curry<b>GPU</b></span><span class="v">ISS</span></div>
+    <div class="brand-sub">功能级指令集模拟器</div>
+    <a class="back" href="index.html">← 设计总览 index.html</a>
+    <nav><ul class="nav">
+      <li><a href="#why"><span class="ix">00</span>定位：可执行的规范</a></li>
+      <li><a href="#inversion"><span class="ix">01</span>SIMT 翻转</a></li>
+      <li><a href="#arch"><span class="ix">02</span>系统架构</a></li>
+      <li><a href="#codegen"><span class="ix">03</span>单一源 → 代码生成</a></li>
+      <li><a href="#core"><span class="ix">04</span>执行核</a></li>
+      <li><a href="#its"><span class="ix">05</span>ITS：分歧与重聚</a></li>
+      <li><a href="#mma"><span class="ix">06</span>张量与 bit-exact</a></li>
+      <li><a href="#memory"><span class="ix">07</span>内存空间</a></li>
+      <li><a href="#verify"><span class="ix">08</span>验证与数值契约</a></li>
+      <li><a href="#layout"><span class="ix">09</span>工程落位与边界</a></li>
+      <li><a href="#roadmap"><span class="ix">10</span>分阶段交付</a></li>
+    </ul></nav>
+    <div class="rail-stat">
+      模型 · <b>功能级</b> / bit-exact / no-timing<br>
+      执行 · <b>decode-once</b> · masked 32-lane<br>
+      分歧 · <b>ITS</b> per-PC grouping<br>
+      边界 · <b>粗</b> pybind（launch/step/diff）<br>
+      阶段 · ① 地基已建 / ② ITS 调研定<br>
+      北极星 · <b>小 Transformer block</b><br>
+      更新 · 2026-06
+    </div>
+  </aside>
+
+  <!-- ================= MAIN ================= -->
+  <main>
+    <header class="hero reveal">
+      <div class="eyebrow">Functional Instruction Set Simulator · 行为级模拟器</div>
+      <h1>curryGPU <span class="accent">ISS</span><br>功能级模拟器</h1>
+      <p class="lede">在写任何 RTL 之前，用一台<b>可执行的模型</b>确证 ISA 的功能完备与自洽：能编码、能解码、能执行、能跑通真实 workload 并产出 <b>bit-exact</b> 正确结果。它既是 ISA 的<b>可执行规范</b>、又是后端 RTL / 编译器的<b>正确性 oracle</b>。<b>无时序</b>——只演化架构状态，不模拟周期与管线。北极星 = 端到端跑通一个小 Transformer block。</p>
+      <div class="badges">
+        <span class="badge"><span class="dot"></span>bit-exact · no-timing</span>
+        <span class="badge cy"><span class="dot"></span>单一源 codegen</span>
+        <span class="badge"><span class="dot"></span>decode-once · masked 32-lane</span>
+        <span class="badge pk"><span class="dot"></span>ITS · per-PC grouping</span>
+      </div>
+    </header>
+
+    <!-- 00 WHY -->
+    <section id="why" class="reveal">
+      <div class="sec-head"><span class="sec-no">00</span><h2>定位：可执行的规范</h2><span class="sec-tag">spec · oracle · bench</span></div>
+      <p class="sec-intro">硬件工程里有一个反复出现的教训：<strong>先有可执行的真值，再写 RTL</strong>。CPU 世界里这台真值叫 Spike（<code>riscv-isa-sim</code>）；GPU 世界没有现成的功能级先例，于是 curryGPU 自建一台。它先于硅、先于 RTL 存在，回答一个问题：「这套 ISA 真的能算对吗？」</p>
+
+      <h3>三重身份</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>身份</th><th>含义</th><th>谁来用</th></tr></thead>
+        <tbody>
+          <tr><td><b>可执行规范</b><br>executable spec</td><td>ISA 的「意义」由 ISS 执行后的架构状态<strong>定义</strong>——文字规范有歧义时，以 ISS 跑出来的结果为准</td><td>ISA 设计者 · 编译器后端</td></tr>
+          <tr><td><b>正确性 oracle</b></td><td>RTL / 编译器产物与 ISS 逐位 diff；任何不一致都是被测物的 bug，不是 oracle 的</td><td>RTL DV · 端到端验证</td></tr>
+          <tr><td><b>workload 运行台</b></td><td>真实 kernel（attention / FFN / LayerNorm）在硅就绪前先在这里跑通、调对</td><td>kernel 开发 · 数值研究</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>功能 ≠ 时序：最大的速度杠杆</h3>
+      <p>ISS <strong>只</strong>建功能核：一条指令进来，架构状态（寄存器 / 谓词 / 内存 / PC）原子地跳到下一态。<strong>没有周期、没有管线、没有 warp 调度策略、没有 cache</strong>——这些是 timing 模型的关注点，与「算得对不对」无关。把它们剥离，本身就是最大的速度杠杆（纯功能模式较 timing 模式快约 <span class="hl">5–10×</span>，源 GPGPU-Sim）。功能与时序<strong>严格分离</strong>，但留干净的回调边界，供日后另起一层包 timing。</p>
+
+      <div class="note gold"><span class="tag">一条贯穿全文的红线</span>功能 oracle 只需要「<b>对尊重同步契约的程序，最终架构态唯一确定</b>」这一条性质。它不关心指令以什么<b>顺序</b>、什么<b>速度</b>到达——只要终态可复现、可对拍。后面 §05 会看到，这条红线如何把 GPU 里最棘手的「线程分歧」收敛成一个可证、可测的设计。</div>
+
+      <h3>范围（纵向切片直奔 Transformer）</h3>
+      <div class="two">
+        <div>
+          <span class="lane-cap">▍内（本工程）</span>
+          <ul class="clean" style="margin-top:6px">
+            <li>声明式编码表 → 生成 C++ 解码器 + Python 汇编 API</li>
+            <li>标量 + warp + <b>ITS</b> 执行核</li>
+            <li>内存空间（global / shared / local）与 barrier</li>
+            <li>MMA（bit-exact）、SFU、归约、async-copy / TMA（eager）</li>
+            <li>kernel-builder 与验证框架</li>
+          </ul>
+        </div>
+        <div>
+          <span class="lane-cap">▍外（后置 / 留接缝）</span>
+          <ul class="clean" style="margin-top:6px">
+            <li>cycle / timing 与性能模型</li>
+            <li>Transformer 用不到的指令</li>
+            <li>LLVM 后端 · FPGA / RTL</li>
+            <li>形式化内存一致性（litmus 作独立工具）</li>
+            <li>cluster / DSMEM（留非破坏接缝，不强依赖）</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 01 SIMT INVERSION -->
+    <section id="inversion" class="reveal">
+      <div class="sec-head"><span class="sec-no">01</span><h2>SIMT 翻转</h2><span class="sec-tag">why GPU ISS ≠ CPU ISS</span></div>
+      <p class="sec-intro">要理解 ISS 的每个设计决策，先理解一件事：<strong>GPU 功能 ISS 不是「并行版的 CPU ISS」，它把复杂度的位置整个翻转了。</strong>这一节是全文的概念地基。</p>
+
+      <p>串行 CPU ISS（Spike）持一份标量状态、核心循环逐条推进——复杂度<strong>全在指令语义</strong>（一条 <code>FFMA</code> 怎么算）。SIMT 把图景反转：单条指令的标量语义<strong>平凡</strong>，复杂度搬到了<strong>「一条指令跨 32 个 lane 复制执行，且要决定哪些 lane 此刻活跃」</strong>。</p>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 286" role="img" aria-label="CPU 标量循环 vs SIMT masked-lane 循环 对照">
+          <text class="sub" x="20" y="22">CPU ISS（Spike 式）· 复杂度在语义</text>
+          <rect class="box" x="20" y="34" width="330" height="232" rx="10"/>
+          <rect class="box" x="40" y="54" width="120" height="34" rx="6"/><text class="lbl" x="100" y="76" text-anchor="middle">1 个 PC</text>
+          <rect class="box vec" x="40" y="100" width="120" height="60" rx="6"/><text class="lbl t-vec" x="100" y="124" text-anchor="middle">XPR[32]</text><text class="tiny" x="100" y="142" text-anchor="middle">一份标量寄存器</text>
+          <path class="edge" d="M170 130 H210" marker-end="url(#a1)"/>
+          <rect class="box" x="212" y="100" width="118" height="60" rx="6"/><text class="lbl" x="271" y="124" text-anchor="middle">decode</text><text class="tiny" x="271" y="142" text-anchor="middle">+ execute</text>
+          <path class="edge" d="M271 160 V196 H100 V162" marker-end="url(#a1)"/><text class="tiny" x="200" y="186" text-anchor="middle">next PC = PC+1（改一个值）</text>
+          <text class="tiny" x="40" y="234">循环：逐条指令推进</text>
+          <text class="tiny" x="40" y="250">分歧 = 改写那一个 PC，无「重新分组」问题</text>
+
+          <text class="sub" x="404" y="22">SIMT ISS · 复杂度在「哪些 lane 活跃」</text>
+          <rect class="box" x="404" y="34" width="336" height="232" rx="10"/>
+          <rect class="box ctl" x="424" y="50" width="296" height="26" rx="5"/><text class="tiny t-ctl" x="572" y="67" text-anchor="middle">active mask + per-lane PC[32] ← 新的状态维度</text>
+          <rect class="box" x="424" y="84" width="118" height="30" rx="6"/><text class="lbl" x="483" y="104" text-anchor="middle">decode ×1</text>
+          <path class="edge-g" d="M542 99 H560" marker-end="url(#a2)"/>
+          <g>
+            <rect class="box vec" x="562" y="84" width="34" height="30" rx="4"/><text class="tiny t-vec" x="579" y="103" text-anchor="middle">L0</text>
+            <rect class="box vec" x="598" y="84" width="34" height="30" rx="4"/><text class="tiny t-vec" x="615" y="103" text-anchor="middle">L1</text>
+            <rect class="box" x="634" y="84" width="34" height="30" rx="4"/><text class="tiny" x="651" y="103" text-anchor="middle">L2</text>
+            <rect class="box vec" x="670" y="84" width="34" height="30" rx="4"/><text class="tiny t-vec" x="687" y="103" text-anchor="middle">…</text>
+          </g>
+          <text class="tiny" x="424" y="134">同一条指令，循环 32 lane，mask=0 的 lane 跳过（不写）</text>
+          <rect class="box vec" x="424" y="146" width="296" height="46" rx="6"/><text class="lbl t-vec" x="572" y="166" text-anchor="middle">vgpr[regID][32]　SoA 三维寄存器堆</text><text class="tiny" x="572" y="182" text-anchor="middle">warp × lane × reg（单 SM ~256 KB）</text>
+          <text class="tiny t-ctl" x="424" y="214">分歧 = next-PC-per-lane + lane 如何重新分组（§05）</text>
+          <text class="tiny" x="424" y="232">内存按 space 分离（global / shared / local / tensor-mem）</text>
+          <text class="tiny" x="424" y="250">同步层级真实，但功能 oracle 只取一个尊重契约的确定序</text>
+          <defs>
+            <marker id="a1" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--ink-faint)"/></marker>
+            <marker id="a2" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--gold)"/></marker>
+          </defs>
+        </svg>
+        <figcaption><b>图 1</b> · 左 = CPU 一个 PC、一份寄存器、顺序推进；右 = SIMT 一次 decode、32 lane、active mask + per-lane PC、SoA 寄存器堆。<b>复杂度从「语义」翻到了「掩码与分组」</b>。</figcaption>
+      </figure>
+
+      <h3>五个结构性差异（每一个都对应一个设计决策）</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>#</th><th>CPU（Spike）</th><th>SIMT（curryGPU ISS）</th><th>带来的决策</th></tr></thead>
+        <tbody>
+          <tr><td class="num">1</td><td>执行单元 = 标量</td><td><b>32-lane 向量</b>：warp 是 fetch/decode 单位，lane 是架构状态单位；每指令带 active mask</td><td>decode-once + masked-lane loop（§04）</td></tr>
+          <tr><td class="num">2</td><td><code>XPR[32]</code></td><td><b><code>[warp×lane×reg]</code> 三维</b>，且分 scalar(uniform) / vector</td><td>SoA <code>vgpr[regID][32]</code>（§04）</td></tr>
+          <tr><td class="num">3</td><td>改写一个 PC</td><td><b>next-PC-per-lane + lane 如何重新分组</b>——Spike 无对应物</td><td>ITS per-PC grouping（§05）</td></tr>
+          <tr><td class="num">4</td><td>无</td><td>warp/CTA/cluster 真同步层级；但调度<b>策略</b>是 timing 关注点</td><td>功能 oracle 取一个确定序即可（§05/§08）</td></tr>
+          <tr><td class="num">5</td><td>单一扁平内存</td><td><b>按 space 分离实例化</b>（global/shared/local/const + 张量近存）</td><td><code>memory_space</code> per-space（§07）</td></tr>
+        </tbody>
+      </table></div>
+      <div class="note"><span class="tag">教学要点</span>记住这张表：后面每一节都是在回答「翻转之后，这件事该怎么做」。<b>第 3 行（分歧）是 GPU ISS 独有、且最难的部分</b>，§05 整节都在讲它。</div>
+    </section>
+
+    <!-- 02 ARCH -->
+    <section id="arch" class="reveal">
+      <div class="sec-head"><span class="sec-no">02</span><h2>系统架构</h2><span class="sec-tag">single source → core → coarse boundary</span></div>
+      <p class="sec-intro">一条主数据流：<strong>一份声明式编码表</strong>同时生成 C++ 解码器与 Python 汇编器；kernel 经汇编器变成 128-bit 指令流，喂进 C++ 功能核；功能核与 Python 只在<strong>粗粒度边界</strong>（launch / step / state-diff）交互；测试框架在 Python 侧做差分与 conformance。</p>
+
+      <div class="legend">
+        <span><i class="sw-uni"></i>单一源 / 代码生成</span><span><i class="sw-vec"></i>C++ 功能核</span>
+        <span><i class="sw-mem"></i>Python 测试 / 工具</span><span><i class="sw-ctl"></i>pybind 粗边界</span>
+      </div>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 360" role="img" aria-label="ISS 系统架构数据流">
+          <rect class="box uni" x="20" y="24" width="200" height="70" rx="9"/><text class="lblg" x="120" y="50" text-anchor="middle">encoding table</text><text class="tiny" x="120" y="68" text-anchor="middle">Python 声明式 · 单一真相源</text><text class="tiny" x="120" y="82" text-anchor="middle">schema(公开) + layout(私有)</text>
+          <path class="edge-c" d="M220 50 H262" marker-end="url(#ac)"/><path class="edge-c" d="M220 74 H262" marker-end="url(#ac)"/>
+          <rect class="box uni" x="264" y="22" width="150" height="30" rx="6"/><text class="sub t-uni" x="339" y="42" text-anchor="middle">C++ 解码器 (gen)</text>
+          <rect class="box uni" x="264" y="58" width="150" height="28" rx="6"/><text class="sub t-uni" x="339" y="76" text-anchor="middle">emit() 汇编器 (gen)</text>
+          <rect class="box uni" x="264" y="92" width="150" height="26" rx="6"/><text class="tiny t-uni" x="339" y="109" text-anchor="middle">JSON IR (gen)</text>
+          <text class="tiny" x="288" y="134">完备性 + 无重叠门</text>
+
+          <rect class="box mem" x="20" y="150" width="200" height="48" rx="9"/><text class="lbl t-mem" x="120" y="172" text-anchor="middle">kernel_builder</text><text class="tiny" x="120" y="188" text-anchor="middle">emit() 构 kernel 指令流</text>
+          <path class="edge-c" d="M264 80 C 150 120, 120 130, 120 150" marker-end="url(#ac)"/>
+          <path class="edge" d="M220 174 H300" marker-end="url(#a3)"/>
+          <rect class="box" x="302" y="156" width="120" height="36" rx="6"/><text class="sub" x="362" y="178" text-anchor="middle">128-bit 指令流</text>
+
+          <rect class="box vec" x="452" y="40" width="288" height="210" rx="12"/>
+          <text class="lblg" x="596" y="64" text-anchor="middle">C++ 功能核</text>
+          <rect class="box" x="470" y="78" width="252" height="34" rx="6"/><text class="sub" x="596" y="99" text-anchor="middle">decode-once（PC-keyed 记忆化）</text>
+          <rect class="box ctl" x="470" y="120" width="252" height="34" rx="6"/><text class="sub t-ctl" x="596" y="141" text-anchor="middle">per-PC grouping 调度（ITS）</text>
+          <rect class="box vec" x="470" y="162" width="252" height="34" rx="6"/><text class="sub t-vec" x="596" y="183" text-anchor="middle">masked 32-lane execute</text>
+          <rect class="box" x="470" y="204" width="252" height="34" rx="6"/><text class="sub" x="596" y="225" text-anchor="middle">架构状态（vgpr / pred / mem / pc）</text>
+          <path class="edge" d="M422 174 H452" marker-end="url(#a3)"/>
+
+          <rect class="box ctl" x="452" y="266" width="288" height="32" rx="7"/><text class="sub t-ctl" x="596" y="287" text-anchor="middle">pybind 粗边界 · launch / step / state-diff</text>
+          <path class="edge-p" d="M596 250 V266"/>
+          <rect class="box mem" x="452" y="312" width="288" height="34" rx="7"/><text class="lbl t-mem" x="596" y="333" text-anchor="middle">test_harness（差分 · conformance）</text>
+          <path class="edge-p" d="M596 298 V312" marker-end="url(#a3)"/>
+          <defs>
+            <marker id="ac" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--cyan)"/></marker>
+            <marker id="a3" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--ink-faint)"/></marker>
+          </defs>
+        </svg>
+        <figcaption><b>图 2</b> · 主数据流。一份 <code>encoding table</code> 双向驱动解码器 + 汇编器 + IR；功能核做 decode-once → per-PC grouping → masked execute；<b>Python/C++ 只在 launch/step/state-diff 三个粗粒度点交互</b>，热循环不过界。</figcaption>
+      </figure>
+
+      <h3>四条结构原则</h3>
+      <ul class="clean">
+        <li><b>单一真相源、双向</b>：编码表既生成解码器、又生成汇编器，二者必然一致（round-trip 可证，§03）。绝不手维护第二份编码。</li>
+        <li><b>功能 / 时序严格分离</b>：现在只建功能核，留干净回调边界供日后包 timing；不让性能关注点污染正确性核。</li>
+        <li><b>粗粒度 pybind 边界</b>：跨语言调用次数 = O(launch + step)，<strong>与指令条数无关</strong>——<code>step(max_steps)</code> 在 C++ 内一直跑到 EXIT / 陷阱 / 预算，不每条指令回 Python。</li>
+        <li><b>依赖单向 <code>isa → iss</code></b>：<code>iss</code> build 时调 <code>isa</code> 生成器，严禁反向，杜绝循环依赖（§09）。</li>
+      </ul>
+    </section>
+
+    <!-- 03 CODEGEN -->
+    <section id="codegen" class="reveal">
+      <div class="sec-head"><span class="sec-no">03</span><h2>单一源 → 代码生成</h2><span class="sec-tag">declarative table · bidirectional</span></div>
+      <p class="sec-intro">编码表是<strong>权威源</strong>，直接驱动 C++ 解码器、Python <code>emit()</code> 汇编器与 JSON IR。生成时做两道门：<strong>完备性</strong>（每条指令都有合法绑定、每个字段宽度/偏移/符号扩展都对）与<strong>无重叠</strong>（没有两条指令的位 cube 相交）。这是「编码正确」的强保证。</p>
+
+      <h3>schema 公开 / layout 私有：引擎与编码无关</h3>
+      <p>编码表拆两层。<strong>schema（公开）</strong>声明指令、操作数、语义、字段名与宽度；<strong>layout（私有）</strong>声明 bit 偏移、opcode 数值、<code>fsel</code> 映射。生成器 = <code>schema + layout → 解码器 / emit / IR</code>。关键纪律：<strong>语义 handler 只消费已解码的字段，从不触碰 raw bit</strong>——于是「引擎」与「精确编码」解耦，工程开源而生产编码可私有（公库带样例 layout 够 build / CI / demo，私有 submodule 注入生产 layout）。</p>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 230" role="img" aria-label="单一源代码生成流水线">
+          <rect class="box uni" x="20" y="40" width="150" height="40" rx="7"/><text class="lblg" x="95" y="58" text-anchor="middle">schema</text><text class="tiny" x="95" y="73" text-anchor="middle">公开 · 语义+字段名</text>
+          <rect class="box ctl" x="20" y="96" width="150" height="40" rx="7"/><text class="lbl t-ctl" x="95" y="114" text-anchor="middle">layout</text><text class="tiny" x="95" y="129" text-anchor="middle">私有 · bit/opcode/fsel</text>
+          <path class="edge" d="M170 60 C 210 60, 210 86, 244 86" marker-end="url(#a4)"/>
+          <path class="edge" d="M170 116 C 210 116, 210 92, 244 92" marker-end="url(#a4)"/>
+          <rect class="box" x="246" y="62" width="150" height="52" rx="8"/><text class="lbl" x="321" y="84" text-anchor="middle">gen_decoder</text><text class="tiny" x="321" y="102" text-anchor="middle">128-bit 区分树 + APInt 提取</text>
+          <rect class="box" x="246" y="130" width="72" height="26" rx="5"/><text class="tiny" x="282" y="147" text-anchor="middle">完备性门</text>
+          <rect class="box" x="324" y="130" width="72" height="26" rx="5"/><text class="tiny" x="360" y="147" text-anchor="middle">无重叠门</text>
+          <path class="edge-g" d="M396 78 H440" marker-end="url(#a2b)"/>
+          <path class="edge-g" d="M396 90 H440" marker-end="url(#a2b)"/>
+          <path class="edge-g" d="M396 102 H440" marker-end="url(#a2b)"/>
+          <rect class="box vec" x="442" y="50" width="200" height="28" rx="6"/><text class="sub t-vec" x="542" y="69" text-anchor="middle">decode.gen.cpp + decoded_inst.h</text>
+          <rect class="box uni" x="442" y="84" width="200" height="28" rx="6"/><text class="sub t-uni" x="542" y="103" text-anchor="middle">emit.gen.py（汇编器钩子）</text>
+          <rect class="box mem" x="442" y="118" width="200" height="28" rx="6"/><text class="sub t-mem" x="542" y="137" text-anchor="middle">isa_ir.json（post-decode 语义）</text>
+          <path class="edge-c" d="M442 64 C 690 64, 700 200, 360 200" marker-end="url(#a4c)"/>
+          <text class="tiny t-uni" x="352" y="190" text-anchor="end">round-trip：emit → decode → IR 零差异</text>
+          <text class="tiny" x="20" y="172">生成物<b style="fill:var(--ink-dim)"> 不入库</b>：build 时生成 · 两次构建逐字节一致（确定性）· git ls-files 私有化门</text>
+          <text class="tiny" x="20" y="214">128-bit 定长 → 自写生成器核心（decodetree 对 &gt;32-bit 弱），APInt 式宽字段提取</text>
+          <defs>
+            <marker id="a4" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--ink-faint)"/></marker>
+            <marker id="a2b" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--gold)"/></marker>
+            <marker id="a4c" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--cyan)"/></marker>
+          </defs>
+        </svg>
+        <figcaption><b>图 3</b> · codegen 流水线。<code>schema + layout</code> → 解码器 + 汇编器 + IR，经完备性 / 无重叠两门把关；<code>emit → decode → IR</code> round-trip 零差异。生成物有意不入库，用「两次构建逐字节一致」做确定性门。</figcaption>
+      </figure>
+
+      <p>128-bit 定长是个工程难点：主流工具（QEMU <code>decodetree</code>、LLVM <code>FixedLenDecoderEmitter</code>）对 >32-bit 支持弱，需要 <strong>APInt 式宽字段提取</strong>，所以生成器核心是自写的——按 opcode / modifier 判别位构造 bit 区分树。<code>.</code>（匹配位）与 <code>-</code>（忽略位）区分 reserved 与控制段；MMA / TMA / sparsity / 寄存器对 / 控制段等用手写 C++ 语义钩子接手已解码字段。</p>
+    </section>
+
+    <!-- 04 CORE -->
+    <section id="core" class="reveal">
+      <div class="sec-head"><span class="sec-no">04</span><h2>执行核</h2><span class="sec-tag">decode-once · masked-lane · SoA</span></div>
+      <p class="sec-intro">功能核的两个核心动作：<strong>decode-once</strong>（一次解码服务一个 PC 上所有 lane）与 <strong>masked-lane loop</strong>（循环 32 lane，<code>active=0</code> 的 lane 跳过、不写寄存器或内存）。寄存器堆用 <strong>SoA</strong>（structure-of-arrays）布局，为日后向量化铺路。</p>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 290" role="img" aria-label="decode-once + masked 32-lane 执行 + SoA 寄存器堆">
+          <rect class="box" x="20" y="36" width="150" height="42" rx="7"/><text class="lbl" x="95" y="56" text-anchor="middle">取当前 PC 的字</text><text class="tiny" x="95" y="71" text-anchor="middle">128-bit instruction</text>
+          <path class="edge" d="M170 57 H206" marker-end="url(#a5)"/>
+          <rect class="box" x="208" y="36" width="140" height="42" rx="7"/><text class="lbl" x="278" y="56" text-anchor="middle">decode ×1</text><text class="tiny" x="278" y="71" text-anchor="middle">PC-keyed 记忆化</text>
+          <path class="edge-g" d="M348 57 H392" marker-end="url(#a5g)"/>
+          <text class="tiny t-vec" x="370" y="48" text-anchor="middle">广播 32 lane</text>
+          <g>
+            <rect class="box vec" x="396" y="36" width="40" height="42" rx="5"/><text class="tiny t-vec" x="416" y="55" text-anchor="middle">lane0</text><text class="tiny t-vec" x="416" y="69" text-anchor="middle">✓</text>
+            <rect class="box vec" x="440" y="36" width="40" height="42" rx="5"/><text class="tiny t-vec" x="460" y="55" text-anchor="middle">lane1</text><text class="tiny t-vec" x="460" y="69" text-anchor="middle">✓</text>
+            <rect class="box" x="484" y="36" width="48" height="42" rx="5"/><text class="tiny" x="508" y="55" text-anchor="middle">lane2</text><text class="tiny" x="508" y="69" text-anchor="middle">✗ m=0</text>
+            <rect class="box vec" x="536" y="36" width="36" height="42" rx="5"/><text class="tiny t-vec" x="554" y="55" text-anchor="middle">…</text>
+            <rect class="box vec" x="576" y="36" width="44" height="42" rx="5"/><text class="tiny t-vec" x="598" y="55" text-anchor="middle">lane31</text><text class="tiny t-vec" x="598" y="69" text-anchor="middle">✓</text>
+          </g>
+          <text class="tiny" x="638" y="52">mask=0 的</text><text class="tiny" x="638" y="66">lane 不写</text>
+
+          <text class="sub" x="20" y="118">SoA 寄存器堆 vgpr[regID][32]　（无类型 32-bit word）</text>
+          <rect class="box vec" x="20" y="128" width="600" height="22" rx="4"/><text class="tiny" x="28" y="143">R1 →</text>
+          <rect class="vec" x="74" y="130" width="33" height="18" rx="2" style="stroke:var(--gold);stroke-width:1"/><rect class="vec" x="110" y="130" width="33" height="18" rx="2" style="stroke:var(--gold);stroke-width:1"/><rect class="vec" x="146" y="130" width="33" height="18" rx="2" style="stroke:var(--gold);stroke-width:1"/>
+          <text class="tiny t-vec" x="190" y="143">… 32 个 lane 值连续存放（一行 = 一个寄存器跨全 warp）</text>
+          <rect class="box vec" x="20" y="154" width="600" height="22" rx="4"/><text class="tiny" x="28" y="169">R2 →</text><text class="tiny t-vec" x="190" y="169">…</text>
+          <text class="tiny" x="20" y="200">对比拒绝方案：per-thread 的 AoS hash-map（GPGPU-Sim 式，get_reg ~3.9% wall-clock 热点）</text>
+
+          <rect class="box ctl" x="20" y="222" width="600" height="50" rx="8"/>
+          <text class="sub t-ctl" x="34" y="242">每个 handler 返回 per-thread next-PC[32]</text>
+          <text class="tiny" x="34" y="260">非分歧时 32 个值相同；分歧时它们分裂 —— 这就是 §05 ITS 的入口。EXIT 把 lane 的 active 清 0、lane_state=exited。</text>
+          <defs>
+            <marker id="a5" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--ink-faint)"/></marker>
+            <marker id="a5g" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--gold)"/></marker>
+          </defs>
+        </svg>
+        <figcaption><b>图 4</b> · decode-once 广播到 32 lane，<code>mask=0</code> 的 lane 被压制（不写寄存器 / 内存）；寄存器堆 SoA <code>vgpr[regID][32]</code>，每行是一个寄存器跨全 warp 的值。handler 返回 per-thread next-PC。</figcaption>
+      </figure>
+
+      <h3>warp 状态：数据结构蓝图</h3>
+      <pre class="code"><span class="c">// 一个 warp 的全部架构状态（功能核私有成员）</span>
+warp_state {
+  <span class="r">vgpr</span>   : uint32[NUM_VREG][<span class="n">32</span>]   <span class="c">// SoA · 无类型 32-bit word（类型随指令 modifier）</span>
+  <span class="r">ureg</span>   : uint32[NUM_UREG]       <span class="c">// per-warp uniform 标量寄存器</span>
+  <span class="r">pred</span>   : bitmask Pn[NUM_PRED]    <span class="c">// per-warp 谓词（1 bit / lane）</span>
+  <span class="r">pc</span>     : uint32[<span class="n">32</span>]            <span class="c">// ★ ITS：per-thread PC（§05 的关键）</span>
+  <span class="r">lane_state</span> : {active,blocked,yielded,exited}[<span class="n">32</span>]
+  <span class="r">Bx</span>     : {participation_mask, reconv_pc, valid}[<span class="n">16</span>]  <span class="c">// 收敛屏障（§05）</span>
+}</pre>
+      <div class="def">
+        <dt>无类型 word</dt><dd>GPR = 无类型 32-bit word（编码里的「8-bit」是寄存器索引、非数据宽度）；类型随指令 modifier 解释。</dd>
+        <dt>sub-word</dt><dd>8/16-bit 结果 <b>extend-to-32</b>（按签名 sign/zero）——循 ARM AArch64 / RISC-V，<b>无 partial-register merge</b>，拒 x86 AL/AX 合并 hazard。</dd>
+        <dt>宽寄存器</dt><dd>64-bit = 偶对齐对 <code>R(2n):R(2n+1)</code>；128-bit = 4-对齐组；packed = SIMD-within-word（小端 lane）。</dd>
+      </div>
+      <div class="note"><span class="tag">阶段 ① 已就位</span>上面 <code>pc[32]</code> / <code>lane_state[32]</code> / <code>Bx[16]</code> 在地基阶段就已建好——但当前是<b>惰性</b>的：调度器假定所有 active lane 共享一个 PC，一旦分歧就 trap。把它们<b>激活</b>，就是阶段 ② ITS（§05）。</div>
+    </section>
+
+    <!-- 05 ITS -->
+    <section id="its" class="reveal">
+      <div class="sec-head"><span class="sec-no">05</span><h2>ITS：分歧与重聚</h2><span class="sec-tag">per-PC grouping · convergence barriers</span></div>
+      <p class="sec-intro">这是 GPU 功能 ISS 独有、且最难的部分，也是本文的核心。问题很具体：<strong>当 warp 内 32 个 lane 走到不同的 PC（分歧），一台没有「重聚栈」的功能 oracle 怎么正确地执行、并在该重聚时重聚？</strong></p>
+
+      <div class="legend">
+        <span><i class="sw-vec"></i>active lane</span><span><i class="sw-ctl"></i>blocked（待重聚）</span>
+        <span><i class="sw-mem"></i>选中执行的组</span><span><i class="sw-red"></i>exited / 非法</span>
+      </div>
+
+      <h3>核心机制：per-PC grouping</h3>
+      <p>不用经典的 IPDOM 重聚栈（GPGPU-Sim / Vortex / Ventus 都是栈式）。curryGPU 用 <strong>per-PC grouping</strong>：每一步——</p>
+      <ul class="clean">
+        <li><b>①</b> 把 active lane 按相同 <code>pc[lane]</code> <b>分组</b>；</li>
+        <li><b>②</b> 按一个<b>确定的全序</b>（min-PC-first 为默认）选一组，<b>decode 一次</b>，只对该组 mask 执行；</li>
+        <li><b>③</b> handler 算 per-thread next-PC，lane 自然分裂 / 推进。warp 退休 = 全 lane exited。</li>
+      </ul>
+      <p>这<strong>不是简化</strong>，而是 post-Volta ITS 的架构语义本身：同 PC 的 warp 内线程可在任意周期同调，重聚可早 / 晚 / 完全省略，唯一约束是 warp 内显式同步（Hanoi arXiv:2407.02944 §IV；NVIDIA Volta whitepaper；Simty 是其硬件存在性证明）。功能 oracle 取最廉价的合规设计即可。</p>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 250" role="img" aria-label="per-PC grouping 调度一步">
+          <text class="sub" x="20" y="22">① 32 个 active lane 处在混合 PC（分歧后）</text>
+          <rect class="box vec" x="20" y="32" width="156" height="26" rx="5"/><text class="tiny t-vec" x="98" y="49" text-anchor="middle">lane 0,1,4,5… @ PC=12</text>
+          <rect class="box ctl" x="184" y="32" width="150" height="26" rx="5"/><text class="tiny t-ctl" x="259" y="49" text-anchor="middle">lane 2,3,6… @ PC=20</text>
+          <rect class="box" x="342" y="32" width="140" height="26" rx="5"/><text class="tiny" x="412" y="49" text-anchor="middle">lane 7,9… @ PC=33</text>
+
+          <text class="sub" x="20" y="92">② 按 PC 分组 → 选 min-PC 组（确定序）</text>
+          <rect class="box mem" x="20" y="102" width="156" height="40" rx="6"/><text class="lblg" x="98" y="120" text-anchor="middle">PC=12 ← 选中</text><text class="tiny" x="98" y="135" text-anchor="middle">min-PC，本步执行</text>
+          <rect class="box" x="184" y="102" width="150" height="40" rx="6" opacity=".5"/><text class="sub" x="259" y="120" text-anchor="middle">PC=20</text><text class="tiny" x="259" y="135" text-anchor="middle">本步挂起</text>
+          <rect class="box" x="342" y="102" width="140" height="40" rx="6" opacity=".5"/><text class="sub" x="412" y="120" text-anchor="middle">PC=33</text><text class="tiny" x="412" y="135" text-anchor="middle">本步挂起</text>
+          <path class="edge-g" d="M98 142 V168" marker-end="url(#a6)"/>
+          <text class="sub" x="20" y="186">③ decode 一次 · 只对 PC=12 组 mask 执行 · 各 lane 算 next-PC</text>
+          <rect class="box vec" x="20" y="196" width="462" height="36" rx="6"/><text class="sub t-vec" x="251" y="218" text-anchor="middle">execute(group=PC12)　→　next-PC 可再分裂 → 下一步重新分组</text>
+
+          <rect class="box" x="512" y="32" width="228" height="200" rx="10"/>
+          <text class="sub" x="528" y="54">≥3 个具名确定序（主门用）</text>
+          <text class="tiny" x="528" y="78">· min_pc_first　（默认 / canonical）</text>
+          <text class="tiny" x="528" y="98">· max_pc_first　（逆比较器）</text>
+          <text class="tiny" x="528" y="118">· round_robin　（PC 排序后轮转）</text>
+          <text class="tiny" x="528" y="138">· oldest_group_first（按创建 seqno）</text>
+          <text class="tiny t-ctl" x="528" y="166">每序须 fair：永不无限跳过</text>
+          <text class="tiny t-ctl" x="528" y="182">runnable 组（否则自旋 corpus</text>
+          <text class="tiny t-ctl" x="528" y="198">一序挂、另一序不挂）</text>
+          <text class="tiny" x="528" y="220">→ 三序最终态须 bit-identical（§08）</text>
+          <defs>
+            <marker id="a6" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--gold)"/></marker>
+          </defs>
+        </svg>
+        <figcaption><b>图 5</b> · per-PC grouping 调度一步：分组 → 选 min-PC 组 → decode-once → masked execute → 重新分组。右侧是用于「序无关性主门」的 ≥3 个具名确定序，每个必须 fair。</figcaption>
+      </figure>
+
+      <h3>收敛屏障：分歧/重聚怎么被记录</h3>
+      <p>per-thread PC 解决「lane 能在不同 PC」，但「该在哪重聚」需要显式状态——<strong>16 槽收敛屏障</strong> <code>Bx{participation_mask, reconv_pc, valid}</code>，由六条控制指令驱动。它<strong>不是</strong>单 IPDOM 栈，而是独立的 barrier 对象（NVIDIA 收敛屏障专利 US10067768B2 的功能等价）。</p>
+
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>指令</th><th>语义（功能核）</th><th>对状态的效果</th></tr></thead>
+        <tbody>
+          <tr><td><b>BSSY</b> Bx,t</td><td>在分歧区<b>之前</b>建立屏障：快照<b>当前 PC-group</b> 为参与集，记重聚目标 <code>t</code></td><td><code>Bx={participation=GROUP_mask, reconv_pc=t, valid=1}</code></td></tr>
+          <tr><td><b>BSYNC</b> Bx</td><td>到达 lane 进入 <code>blocked</code>；当参与集全部 ∈ {blocked, exited} 时，<b>实际到达的存活子集</b>在 <code>reconv_pc</code> 重激活</td><td>fire 谓词 <code>participation ⊆ (blocked|exited)</code>　（<code>yielded</code> 不计入）</td></tr>
+          <tr><td><b>BREAK</b> Bx</td><td>把 lane 从参与集清位（loop break / 早退；防 BSYNC 永等）</td><td><code>participation &amp;= ~bits(M)</code></td></tr>
+          <tr><td><b>CONT</b></td><td>分支回 loop header（非 barrier op；重聚由该 loop 自己的 Bx 管）</td><td>—（BRA 回边）</td></tr>
+          <tr><td><b>YIELD</b></td><td><b>纯调度提示、零架构效果</b>：促调度器下步选另一 PC-group（让自旋 / 生产者-消费者推进）</td><td><code>lane→yielded</code>（仍 runnable）</td></tr>
+          <tr><td><b>EXIT</b>/KILL/RET</td><td>lane 退休，并<b>立即从所有 valid Bx 清位</b>（starvation-free 硬前提）</td><td><code>lane→exited</code>，∀Bx 清位</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>一个 if/else diamond 怎么跑</h3>
+      <p>编译器把分歧区 lower 成「<code>BSSY</code> 立屏障 → predicated <code>BRA</code> 分流 → 两路各自执行 → <code>BSYNC</code> 在 join 重聚」。分歧由 <strong>BRA 的谓词</strong>承载，<code>BSSY</code>/<code>BSYNC</code> 本身无谓词。</p>
+
+      <pre class="code"><span class="g">L0:</span> <span class="k">BSSY</span>  <span class="r">B0</span>, <span class="g">L_join</span>     <span class="c">// participation = {全 32 lane}, reconv = L_join</span>
+<span class="g">L1:</span> @<span class="r">P0</span> <span class="k">BRA</span> <span class="g">L_else</span>     <span class="c">// P0 真→落 L2(then)，P0 假→跳 L_else</span>
+<span class="g">L2:</span> <span class="k">IADD3</span> <span class="r">R4</span>,<span class="r">R4</span>,<span class="r">R1</span>    <span class="c">// then 块：只有 P0-true lane 在此组</span>
+<span class="g">L3:</span> <span class="k">BRA</span>  <span class="g">L_join</span>
+<span class="g">L_else:</span> <span class="k">IADD3</span> <span class="r">R4</span>,<span class="r">R4</span>,<span class="r">R2</span> <span class="c">// else 块：P0-false lane</span>
+<span class="g">L_join:</span> <span class="k">BSYNC</span> <span class="r">B0</span>          <span class="c">// 两路到齐 → 32 lane 在此重聚，B0.valid=0</span>
+       <span class="k">EXIT</span></pre>
+
+      <p class="lane-cap">▍ active mask 随这段代码的演化（黄=active，蓝=本步选中执行的组，粉=blocked 待重聚）</p>
+      <div class="lanes" aria-label="BSSY 后 32 lane 全 active">
+        <span class="lane on">0</span><span class="lane on">1</span><span class="lane on">2</span><span class="lane on">3</span><span class="lane on">4</span><span class="lane on">5</span><span class="lane on">6</span><span class="lane on">7</span><span class="lane on">·</span><span class="lane on">·</span><span class="lane on">31</span>
+        <span class="lane-note">L0 BSSY：32 lane 全 active，全部登记进 B0.participation</span>
+      </div>
+      <div class="lanes" aria-label="分歧后 then 组执行">
+        <span class="lane b">0</span><span class="lane b">1</span><span class="lane">2</span><span class="lane">3</span><span class="lane b">4</span><span class="lane b">5</span><span class="lane">6</span><span class="lane">7</span><span class="lane b">·</span><span class="lane">·</span><span class="lane">31</span>
+        <span class="lane-note">L2 then：min-PC 选中 then 组（蓝）执行；else lane 在 L_else 挂起</span>
+      </div>
+      <div class="lanes" aria-label="join 处 blocked 等待">
+        <span class="lane blk">0</span><span class="lane blk">1</span><span class="lane blk">2</span><span class="lane blk">3</span><span class="lane blk">4</span><span class="lane blk">5</span><span class="lane blk">6</span><span class="lane blk">7</span><span class="lane blk">·</span><span class="lane blk">·</span><span class="lane blk">31</span>
+        <span class="lane-note">L_join BSYNC：先到的 lane blocked（粉），待全 participation 到齐 → fire</span>
+      </div>
+      <div class="lanes" aria-label="重聚后 32 lane 全 active">
+        <span class="lane on">0</span><span class="lane on">1</span><span class="lane on">2</span><span class="lane on">3</span><span class="lane on">4</span><span class="lane on">5</span><span class="lane on">6</span><span class="lane on">7</span><span class="lane on">·</span><span class="lane on">·</span><span class="lane on">31</span>
+        <span class="lane-note">fire：32 lane 在 reconv_pc 重激活，重新收敛</span>
+      </div>
+
+      <h3>lane 状态机</h3>
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 210" role="img" aria-label="lane 状态机：active/blocked/yielded/exited">
+          <rect class="box vec" x="80" y="80" width="120" height="48" rx="10"/><text class="lblg" x="140" y="100" text-anchor="middle">active</text><text class="tiny" x="140" y="116" text-anchor="middle">参与分组/执行</text>
+          <rect class="box ctl" x="320" y="80" width="120" height="48" rx="10"/><text class="lbl t-ctl" x="380" y="100" text-anchor="middle">blocked</text><text class="tiny" x="380" y="116" text-anchor="middle">BSYNC 到达待重聚</text>
+          <rect class="box" x="320" y="158" width="120" height="38" rx="10"/><text class="lbl" x="380" y="182" text-anchor="middle">yielded</text>
+          <rect class="box red" x="560" y="80" width="120" height="48" rx="10"/><text class="lbl t-red" x="620" y="100" text-anchor="middle">exited</text><text class="tiny" x="620" y="116" text-anchor="middle">退休 · 清所有 Bx</text>
+          <path class="edge-p" d="M200 100 H318" marker-end="url(#a7p)"/><text class="tiny t-ctl" x="259" y="92" text-anchor="middle">BSYNC 到达</text>
+          <path class="edge-g" d="M360 80 C 320 44, 200 44, 162 78" marker-end="url(#a7g)"/><text class="tiny t-vec" x="260" y="50" text-anchor="middle">fire：全到齐 → reconv_pc 重激活</text>
+          <path class="edge" d="M198 118 C 250 150, 300 166, 318 174" marker-end="url(#a7)"/><text class="tiny" x="244" y="166" text-anchor="middle">YIELD</text>
+          <path class="edge" d="M344 158 C 250 132, 250 124, 322 112" marker-end="url(#a7)"/><text class="tiny" x="244" y="138" text-anchor="middle">被重选→active</text>
+          <path class="edge-r" d="M200 90 C 380 -4, 560 22, 612 78" marker-end="url(#a7r)"/><text class="tiny t-red" x="470" y="22" text-anchor="middle">EXIT / KILL / RET（从任意态）</text>
+          <text class="tiny" x="80" y="42">起始：全 lane active · 全 lane exited ⇒ warp 退休</text>
+          <defs>
+            <marker id="a7" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--ink-faint)"/></marker>
+            <marker id="a7p" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--pink)"/></marker>
+            <marker id="a7g" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--gold)"/></marker>
+            <marker id="a7r" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--red)"/></marker>
+          </defs>
+        </svg>
+        <figcaption><b>图 6</b> · lane 状态机。<code>active → blocked</code>（BSYNC 到达）；<code>blocked → active</code>（fire：参与集全到齐，在 reconv_pc 重激活）；<code>YIELD</code> 进 yielded（纯调度提示）；<code>EXIT</code> 从任意态进 exited 并清所有 Bx。</figcaption>
+      </figure>
+
+      <h3>核心性质：最终态与调度序无关</h3>
+      <p>这是功能 oracle 唯一真正需要、也是阶段 ② 主验收门的性质：<strong>对尊重同步契约的程序，最终架构态与「组选择序」无关。</strong>为什么成立？因为——每 lane 的架构态<strong>私有</strong>；所有跨-lane 交互都经<strong>显式重聚</strong>或 <code>membermask ⊆ active</code> 门控；而 warp 内无屏障隔离的内存竞争<strong>本身就是 UB</strong>（无需序无关）。于是不同的合规调度序只是「同一组私有状态机的不同交错」，终态唯一（闭包性质，参见 Habermaier-Knapp ESOP 2012）。</p>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 180" role="img" aria-label="三种调度序收敛到同一最终态">
+          <rect class="box" x="20" y="74" width="120" height="40" rx="8"/><text class="lbl" x="80" y="98" text-anchor="middle">同一 kernel</text>
+          <path class="edge-g" d="M140 84 C 180 60, 200 46, 236 46" marker-end="url(#a8)"/>
+          <path class="edge-c" d="M140 94 H236" marker-end="url(#a8c)"/>
+          <path class="edge-l" d="M140 104 C 180 128, 200 142, 236 142" marker-end="url(#a8l)"/>
+          <rect class="box vec" x="238" y="30" width="200" height="32" rx="6"/><text class="sub t-vec" x="338" y="50" text-anchor="middle">序 A · min_pc_first</text>
+          <rect class="box uni" x="238" y="78" width="200" height="32" rx="6"/><text class="sub t-uni" x="338" y="98" text-anchor="middle">序 B · max_pc_first</text>
+          <rect class="box ten" x="238" y="126" width="200" height="32" rx="6"/><text class="sub t-ten" x="338" y="146" text-anchor="middle">序 C · round_robin</text>
+          <path class="edge" d="M438 46 C 500 46, 520 84, 556 90" marker-end="url(#a8)"/>
+          <path class="edge" d="M438 94 H556" marker-end="url(#a8)"/>
+          <path class="edge" d="M438 142 C 500 142, 520 100, 556 96" marker-end="url(#a8)"/>
+          <rect class="box vec" x="558" y="70" width="182" height="48" rx="9"/><text class="lblg" x="649" y="90" text-anchor="middle">同一最终 snapshot</text><text class="tiny" x="649" y="106" text-anchor="middle">bit-identical ⇒ 主门通过</text>
+          <defs>
+            <marker id="a8" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--ink-faint)"/></marker>
+            <marker id="a8c" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--cyan)"/></marker>
+            <marker id="a8l" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--lime)"/></marker>
+          </defs>
+        </svg>
+        <figcaption><b>图 7</b> · 序无关性 metamorphic 主门：同一分歧 kernel 在 ≥3 个具名确定序下跑，断言最终 <code>snapshot()</code> 逐位一致。这<b>替代了「对真实硬件 trace」</b>——功能 oracle 不需要硬件，只需要这条可证性质。</figcaption>
+      </figure>
+
+      <div class="note pink"><span class="tag">已锁定的设计决策（来自 ITS 调研）</span><b>participation = GROUP-mask</b>（跟 NVIDIA 对齐，非 guard 子集）；屏障效果只施于 guard-true lane，<b><code>BSSY</code>/<code>BSYNC</code> 无谓词</b>（predicated 形式判为 out-of-scope，避死锁），<code>BREAK</code>/<code>YIELD</code> 可谓词；collectives（<code>ELECT</code>+<code>VOTE</code>）以最小 NV 集入阶段 ②。完整推导与对抗评审见 <code>docs/implement/ISS/research-its.md</code>。</div>
+    </section>
+
+    <!-- 06 MMA -->
+    <section id="mma" class="reveal">
+      <div class="sec-head"><span class="sec-no">06</span><h2>张量与 bit-exact</h2><span class="sec-tag">leader-issue MMA · FDA(F=25)</span></div>
+      <p class="sec-intro">MMA 不模拟脉动阵列的 dataflow——功能上<strong>一次算完整 bit-exact tiled matmul</strong>。难点不在「怎么乘」，而在「<strong>怎么累加才能逐位可复现</strong>」：张量核的累加顺序、对齐、舍入决定了最后一个 bit。</p>
+
+      <h3>leader-issue 宏-op</h3>
+      <p><code>ELECT</code> 在 membermask 内选<strong>唯一</strong> leader lane（最低 active lane）发描述符，非 leader lane 在该 PC 跳过；ITS 收敛屏障保证 warp 在 MMA 处收敛、同步前进。A/B 经 <strong>shared descriptor</strong>（驻 UR，载 shape/stride/tile/swizzle）取数；C/D 累加器驻<strong>张量近存</strong>（tensor-mem），不进 GPR fragment。这是单指令、warp 级的宏操作，对齐 Blackwell <code>tcgen05</code>。</p>
+
+      <h3>统一 FDA(F=25)：累加规范</h3>
+      <p>单条 MMA（一个 K-tile）算 <code>d = c + Σ a_k·b_k</code>，五步——所有 <code>.kind</code>（F16/BF16/TF32/FP8/FP6/FP4/MX/NVFP4）<strong>统一</strong>，不抄各架构的 per-format 算法动物园（那正是跨架构数值不一致的来源）。</p>
+
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 200" role="img" aria-label="FDA(F=25) 五步累加流水线">
+          <rect class="box red" x="14" y="70" width="116" height="58" rx="8"/><text class="lbl t-red" x="72" y="92" text-anchor="middle">① 特殊值</text><text class="tiny" x="72" y="108" text-anchor="middle">NaN / 0×∞</text><text class="tiny" x="72" y="120" text-anchor="middle">/ ±∞ 先处理</text>
+          <path class="edge" d="M130 99 H150" marker-end="url(#a9)"/>
+          <rect class="box ten" x="152" y="70" width="120" height="58" rx="8"/><text class="lbl t-ten" x="212" y="92" text-anchor="middle">② 精确乘积</text><text class="tiny" x="212" y="108" text-anchor="middle">dequant + block-scale</text><text class="tiny" x="212" y="120" text-anchor="middle">定点 · 不 FTZ</text>
+          <path class="edge" d="M272 99 H292" marker-end="url(#a9)"/>
+          <rect class="box ten" x="294" y="70" width="120" height="58" rx="8"/><text class="lbl t-ten" x="354" y="88" text-anchor="middle">③ 对齐 e_max</text><text class="tiny" x="354" y="104" text-anchor="middle">截 F=25</text><text class="tiny" x="354" y="116" text-anchor="middle">fraction bits（RZ）</text>
+          <path class="edge" d="M414 99 H434" marker-end="url(#a9)"/>
+          <rect class="box vec" x="436" y="70" width="124" height="58" rx="8"/><text class="lbl t-vec" x="498" y="88" text-anchor="middle">④ 定点求和</text><text class="tiny" x="498" y="104" text-anchor="middle">宽累加器</text><text class="tiny t-vec" x="498" y="116" text-anchor="middle">★ 顺序无关</text>
+          <path class="edge" d="M560 99 H580" marker-end="url(#a9)"/>
+          <rect class="box" x="582" y="70" width="164" height="58" rx="8"/><text class="lbl" x="664" y="88" text-anchor="middle">⑤ 规格化 + RNE</text><text class="tiny" x="664" y="104" text-anchor="middle">一次舍入到 FP32</text><text class="tiny" x="664" y="116" text-anchor="middle">→ 驻 tensor-mem</text>
+          <text class="tiny" x="14" y="40">单条 MMA = 一次 fused-dot-add；跨 K-tile 累加 = FP32 累加器复用（唯一顺序相关处，由 kernel K-loop 固定）</text>
+          <text class="tiny t-vec" x="380" y="156" text-anchor="middle">第 ④ 步是关键：定点整数加法可结合 ⇒ 不需 pin reduction 顺序，任意顺序 bit-exact 相同</text>
+          <defs>
+            <marker id="a9" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--ink-faint)"/></marker>
+          </defs>
+        </svg>
+        <figcaption><b>图 8</b> · FDA(F=25) fused-dot-add。对齐 e_max 截 25 fraction bit、宽定点求和（顺序无关）、末次 RNE 规格化到 FP32。依据 MMA-Sim（arXiv:2511.10909）实测；F=25 ≥ FP32 的 24-bit significand，对齐 Blackwell、避开 FP8 F=13 瓶颈。</figcaption>
+      </figure>
+
+      <div class="def">
+        <dt>F=25</dt><dd>所有 <code>.kind</code> 统一；≥ FP32 的 24-bit significand，论文建议「≥23 bit，越多越好」。</dd>
+        <dt>全 FP32 范围</dt><dd>输入/乘积/累加器/输出皆不 FTZ、保留 subnormal；定点累加器无中间溢出。</dd>
+        <dt>仅对称舍入</dt><dd>对齐截断 RZ（fused 固有）+ 末次 RNE；不用 RD，避开 round-down 的系统性负偏。</dd>
+        <dt>SFU</dt><dd><code>MUFU.EX2/LG2</code> 取 <b>correctly-rounded</b>（<code>RN(2^x)</code>，≤0.5 ULP vs MPFR）；<code>exp = exp2(x·log2e)</code>。</dd>
+      </div>
+    </section>
+
+    <!-- 07 MEMORY -->
+    <section id="memory" class="reveal">
+      <div class="sec-head"><span class="sec-no">07</span><h2>内存空间</h2><span class="sec-tag">per-space · sparse · gather/scatter</span></div>
+      <p class="sec-intro">内存不是单一扁平数组，而是<strong>按 space 分离实例化</strong>：抽象基类 <code>memory_space</code> + 稀疏实现 <code>memory_space_impl</code>（4KB 块 hashmap），每个空间一个实例。32-lane 访存包成 <strong>gather/scatter</strong>，支持 byte-masked 写。</p>
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 150" role="img" aria-label="内存空间与 gather/scatter">
+          <rect class="box vec" x="20" y="48" width="150" height="54" rx="8"/><text class="lbl t-vec" x="95" y="70" text-anchor="middle">32 lane addr</text><text class="tiny" x="95" y="87" text-anchor="middle">load&lt;T&gt; / store&lt;T&gt;</text>
+          <path class="edge-g" d="M170 75 H206" marker-end="url(#a10)"/>
+          <rect class="box ctl" x="208" y="48" width="150" height="54" rx="8"/><text class="lbl t-ctl" x="283" y="70" text-anchor="middle">gather / scatter</text><text class="tiny" x="283" y="87" text-anchor="middle">32 地址 · byte-mask</text>
+          <path class="edge" d="M358 75 H394" marker-end="url(#a10b)"/>
+          <rect class="box mem" x="396" y="34" width="100" height="24" rx="5"/><text class="tiny t-mem" x="446" y="50" text-anchor="middle">global</text>
+          <rect class="box mem" x="396" y="62" width="100" height="24" rx="5"/><text class="tiny t-mem" x="446" y="78" text-anchor="middle">shared / L1</text>
+          <rect class="box mem" x="396" y="90" width="100" height="24" rx="5"/><text class="tiny t-mem" x="446" y="106" text-anchor="middle">local (per-lane)</text>
+          <rect class="box ten" x="506" y="34" width="116" height="24" rx="5"/><text class="tiny t-ten" x="564" y="50" text-anchor="middle">tensor-mem</text>
+          <rect class="box mem" x="506" y="62" width="116" height="24" rx="5"/><text class="tiny t-mem" x="564" y="78" text-anchor="middle">const c[bank][off]</text>
+          <text class="tiny" x="636" y="50">每空间 =</text><text class="tiny" x="636" y="64">独立稀疏</text><text class="tiny" x="636" y="78">4KB 块 map</text>
+          <text class="tiny" x="20" y="132">atomic RMW 单线程序列化、不可分 · async-copy/TMA 数据急切 memcpy、credit 让握手解析（功能 no-op）</text>
+          <defs>
+            <marker id="a10" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--gold)"/></marker>
+            <marker id="a10b" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="var(--ink-faint)"/></marker>
+          </defs>
+        </svg>
+        <figcaption><b>图 9</b> · 内存模型：32-lane <code>load/store</code> 展开为 gather/scatter；每个 space 一份稀疏 4KB-块 map。atomic RMW 单线程序列化；async-copy/TMA 数据急切搬运、握手用 credit 解析。<b>本节属阶段 ③（ITS 之后）</b>。</figcaption>
+      </figure>
+      <p>地址空间集与 ISA 对齐（见 <a href="isa.html#operands">ISA §02</a>）：<code>{register, tensor-mem, shared/L1, const, local, global}</code>。<strong>cluster / DSMEM 延后</strong>，只留非破坏接缝——<code>cluster_dim</code> 默认 1（= 恒等，单-CTA 行为 bit 不变）；真·跨-CTA 访问干净 <code>unsupported</code> trap，绝不伪造远端态。</p>
+    </section>
+
+    <!-- 08 VERIFY -->
+    <section id="verify" class="reveal">
+      <div class="sec-head"><span class="sec-no">08</span><h2>验证与数值契约</h2><span class="sec-tag">order-independence · two-tier tolerance</span></div>
+      <p class="sec-intro">「怎么<strong>知道</strong>它对？」——ISS 的价值全系于此。验证按指令类显式立契约，并把 GPU 里最难的两件事（分歧、低精度数值）各自配一道可执行的门。</p>
+
+      <h3>两层数值容差</h3>
+      <figure>
+        <svg class="dgm" viewBox="0 0 760 170" role="img" aria-label="两层数值容差">
+          <rect class="box vec" x="20" y="30" width="350" height="120" rx="12"/>
+          <text class="lblg" x="195" y="54" text-anchor="middle">Tier-1 · GOLD（conformance）</text>
+          <text class="tiny" x="40" y="78">C++ 核 vs 自身 MPFR / fp64 精确规范</text>
+          <text class="tiny" x="40" y="96">规范 = FDA(F=25) + CR EX2 + IEEE-RNE</text>
+          <rect class="box" x="40" y="106" width="310" height="30" rx="6"/><text class="sub t-vec" x="195" y="126" text-anchor="middle">逐基元 + 整块　0 ULP（bit-exact）</text>
+          <rect class="box uni" x="390" y="30" width="350" height="120" rx="12"/>
+          <text class="lbl t-uni" x="565" y="54" text-anchor="middle">Tier-2 · SANITY（validation）</text>
+          <text class="tiny" x="410" y="78">整块 vs 独立 fp64 参考（numpy 主 / PyTorch 交叉）</text>
+          <text class="tiny" x="410" y="96">判据 |a−b| ≤ atol + rtol·|b|（报 max + RMS）</text>
+          <rect class="box" x="410" y="106" width="310" height="30" rx="6"/><text class="sub t-uni" x="565" y="126" text-anchor="middle">非 bit-exact（累加序 / exp 都不同）</text>
+        </svg>
+        <figcaption><b>图 10</b> · 两层容差。<b>Tier-1 须先 0-ULP 通过</b>，Tier-2 校准才可信。绝不对 numpy 要求 bit-exact（其累加方式不同，且 PyTorch 跨架构本就非 bit-reproducible）。容差暂定 rtol=2⁻¹³，阶段实测收紧。</figcaption>
+      </figure>
+
+      <h3>四道可执行的门</h3>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>门</th><th>测什么</th><th>怎么测</th></tr></thead>
+        <tbody>
+          <tr><td><b>序无关性</b><br>（ITS 主门）</td><td>分歧引擎正确</td><td>≥3 具名确定序在无竞争分歧 corpus 上最终 snapshot bit-identical（§05 图 7）；每 BSYNC debug 断言重聚 mask</td></tr>
+          <tr><td><b>round-trip</b></td><td>编码自洽</td><td>边界值矩阵上 <code>emit → decode → IR</code> 零差异；完备性 / 无重叠门</td></tr>
+          <tr><td><b>conformance</b></td><td>数值正确</td><td>Tier-1 0 ULP vs MPFR；SFU exp 穷举（fp16/bf16 全、fp32 全 2³²）</td></tr>
+          <tr><td><b>差分</b></td><td>对拍真值</td><td>Varity 式随机差分；架构状态计数器（instructions / divergence-events / mem-ops）1:1 diff</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>结构化陷阱：绝不挂起、绝不静默给错</h3>
+      <p>序无关门只对契约程序 sound；违约 = UB，oracle 必须使其<strong>可观测且确定</strong>。畸形 / 非法程序产生结构化陷阱 <code>Trap{kind, reason, pc, detail}</code>，分类：<strong>assemble 期校验</strong>（错寄存器/对/modifier/越界立即数）、<strong>decode 陷阱</strong>（未知 opcode / 非法 reserved 位）、<strong>execute 陷阱</strong>（非法 PC / 分支目标）、<strong>max-step 陷阱</strong>（预算内未 EXIT），以及 ITS 新增的 <strong>convergence 陷阱</strong>（membermask ⊄ active、ELECT 非唯一、barrier 死锁）。每个陷阱是其检测点架构态的纯函数，故所有序到同一陷阱。</p>
+    </section>
+
+    <!-- 09 LAYOUT -->
+    <section id="layout" class="reveal">
+      <div class="sec-head"><span class="sec-no">09</span><h2>工程落位与边界</h2><span class="sec-tag">isa/ + iss/ · one-way dep</span></div>
+      <p class="sec-intro">仓库根 = 整个 curryGPU 工程（非仅 ISS）。顶层 <code>isa/</code> 是 ISA 单一源（被 ISS 现用、未来 RTL / 汇编器 / 文档共享）；<code>iss/</code> 是功能 ISS 独立子树。构建按组件自治，依赖<strong>严格单向</strong>。</p>
+      <pre class="code">curryGPU/
+├── docs/                  <span class="c"># design/(isa.html · iss.html · index) + implement/ISS/</span>
+├── <span class="r">isa/</span>                   <span class="c"># ISA 单一源（顶层共享）</span>
+│   ├── schema.py          <span class="c"># 声明式编码表（公开 · 真源）</span>
+│   ├── layout/            <span class="c"># bit 偏移 / opcode（样例公开 · 生产私有 submodule）</span>
+│   ├── codegen.py         <span class="c"># 表 → C++ 解码器 + IR + 完备/无重叠门</span>
+│   └── assembler.py       <span class="c"># 表驱动 emit()（双向）</span>
+├── <span class="r">iss/</span>                   <span class="c"># 功能 ISS（独立子树 = 当前构建目标）</span>
+│   ├── CMakeLists.txt      <span class="c"># codegen(DEPENDS ../isa) → C++ 核 → pybind → ctest</span>
+│   ├── binding/native.cpp  <span class="c"># C++ 功能核 + 粗 pybind（launch/step/state-diff）</span>
+│   └── build/ (gitignored) <span class="c"># 生成的 decode.gen.cpp / isa_ir.json</span>
+└── (rtl/ dv/ sw/ — 未来按需，现在不建空目录)</pre>
+      <ul class="clean">
+        <li><b>依赖单向 <code>isa → iss</code></b>：iss build 时调 isa 生成器，严禁反向（防循环）。</li>
+        <li><b>粗 pybind 边界</b>：仅 <code>launch / step(max_steps) / state-diff</code>；跨边界调用数 O(launch+step)，与指令数无关。</li>
+        <li><b>生成物入 <code>iss/build/</code>、不入库</b>：CI 用「两次构建逐字节一致」+ <code>git ls-files</code> 私有化门替代 git-diff 式 regen-clean。</li>
+        <li><b><code>currygpu</code> 作 namespace package</b> 横跨 <code>isa/</code>（纯 Python）+ <code>iss/</code>（C++ 扩展）；仓库根不放 Python 包文件（根是 HW 工程根）。</li>
+      </ul>
+    </section>
+
+    <!-- 10 ROADMAP -->
+    <section id="roadmap" class="reveal">
+      <div class="sec-head"><span class="sec-no">10</span><h2>分阶段交付</h2><span class="sec-tag">vertical slices → Transformer</span></div>
+      <p class="sec-intro">approach = 纵向切片直奔 Transformer。每阶段可独立运行、可验证、可回滚。当前：<strong>阶段 ① 地基已建并提交</strong>；<strong>阶段 ② ITS 调研完成、决策锁定，待写 plan</strong>。</p>
+      <div class="road">
+        <div class="row"><span class="rn">①</span><span class="rt">编码 / 解码骨架 + 标量·warp 核<small>编码表 + 生成解码器 + emit() · ALU + 谓词 + 非分歧分支 + EXIT</small></span><span class="chip lock">地基已建</span></div>
+        <div class="row"><span class="rn">②</span><span class="rt">ITS 分歧<small>per-PC grouping + 收敛屏障 + 序无关性主门 + 分歧 corpus + collectives(ELECT/VOTE)</small></span><span class="chip next">调研定 · 待 plan</span></div>
+        <div class="row"><span class="rn">③</span><span class="rt">内存与同步<small>memory_space(global/shared/local) + barrier + atomics</small></span><span class="chip resv">后置</span></div>
+        <div class="row"><span class="rn">④</span><span class="rt">张量与数值<small>MMA bit-exact(FDA F=25) + SFU exp + 低精度 MX/NVFP4 量化</small></span><span class="chip resv">后置</span></div>
+        <div class="row"><span class="rn">⑤</span><span class="rt">组装 Transformer block<small>attention(QKᵀ/softmax/×V) + FFN + LayerNorm + residual</small></span><span class="chip todo">北极星</span></div>
+      </div>
+
+      <div class="note gold"><span class="tag">当前位置</span>你正读的设计文档对应阶段 ① 已落成、阶段 ② 即将开工的时点。阶段 ② 的完整调研（含已锁定决策与对抗评审）见 <code>docs/implement/ISS/research-its.md</code>；地基实现计划见 <code>plan_foundation.md</code>。</div>
+
+      <footer class="foot">
+        curryGPU · 功能级 ISS · 设计文档 · 2026-06<br>
+        <b>方法</b>：综合 GPGPU-Sim / Vortex / Simty / Hanoi / MMA-Sim 等系统的核查结论，clean-slate 自定义；功能 / 时序严格分离，单一源 codegen 驱动解码器 + 汇编器，经独立对抗式评审收口。<br>
+        <b>边界</b>：本文为设计层文档（教学导向）；精确数据结构、容差数值与实现细节随各阶段 plan 与实测收紧。深度技术依据见 <code>docs/implement/ISS/{spec,research-notes,research-its}.md</code>。
+      </footer>
+    </section>
+
+  </main>
+</div>
+
+<script>
+const links=[...document.querySelectorAll('.nav a[href^="#"]')];
+const map=new Map(links.map(a=>[a.getAttribute('href').slice(1),a]));
+const spy=new IntersectionObserver((es)=>{
+  es.forEach(e=>{ if(e.isIntersecting){ links.forEach(l=>l.classList.remove('active')); const a=map.get(e.target.id); if(a)a.classList.add('active'); }});
+},{rootMargin:'-12% 0px -78% 0px'});
+document.querySelectorAll('section[id]').forEach(s=>spy.observe(s));
+const rev=new IntersectionObserver((es)=>{
+  es.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('in'); rev.unobserve(e.target);} });
+},{rootMargin:'0px 0px -8% 0px'});
+document.querySelectorAll('.reveal').forEach((el,i)=>{ el.style.transitionDelay=(Math.min(i,3)*60)+'ms'; rev.observe(el); });
+</script>
+</body>
+</html>
