@@ -58,13 +58,13 @@ warp_state_t
 per-PC grouping 不是简化，而是 post-Volta ITS 架构语义本身（Hanoi §IV）。每步：① 按相同 PC 对 active lane 分组；② **最小-PC 优先**选一组（确定序，仅为 trace 可复现），decode 一次，跨组 mask 执行；③ handler 算 per-thread next-PC，自然分裂/推进。warp 退休 = 全 lane exited。收敛屏障状态机（按 US10067768B2 / Hanoi 语义）：
 
 - `BSSY Bx, target`：`Bx.participation_mask = 当前组 mask; Bx.reconv_pc = target; valid = true`
-- `BSYNC Bx`：lane → blocked；当 Bx mask 内 lane 全 ∈ {blocked, yielded, exited} 时，存活子集在 reconv_pc 重激活、`valid = false`
+- `BSYNC Bx`：lane → blocked；当 Bx participation mask 内 lane 全 ∈ {blocked, exited} 时，**实际到达的存活子集（blocked ∩ participation）**在 reconv_pc 重激活、`valid = false`（**勘误**：原作「blocked, yielded, exited」，但 `yielded` lane 尚未执行 BSYNC、计入 fire 集会使最终态序相关——见 `research-its.md` §4 不变式 1）
 - `BREAK Bx`：从 `participation_mask` 清位（loop break / 早退；防 BSYNC 永等）
 - `CONT`：分支到 loop header（重聚由该 loop 自己的 Bx 管）
-- `YIELD`：标记 lane yielded，强制调度器推进另一 PC-group（让自旋 / 生产者-消费者终止）
+- `YIELD`：标记 lane yielded（**纯调度提示、零架构效果**），强制调度器推进另一 PC-group（让自旋 / 生产者-消费者终止）；`yielded` lane 仍 runnable、被重选后翻回 active 并最终到 BSYNC 翻 blocked——**不**计入上面的 fire 集
 - `EXIT/KILL/RET`：lane → exited，并**立即从所有 valid `Bx.participation_mask` 清位**（ISA §10 starvation-free 硬前提，退休 lane 不死锁待决屏障）
 
-**核心性质**：对尊重同步契约的程序，**最终架构态与组选择序无关**——每 lane 私有架构态 + 所有跨-lane 交互经显式重聚 / `membermask ⊆ active` 门控 + warp 内无屏障的内存竞争 = UB。这是 Hanoi §IV 的闭包论证，也是功能 oracle 唯一需要的性质 ⇒ 序无关性 metamorphic 测试（≥3 种确定序，断言最终态 bit 一致）即主验收门，替代「对真实硬件 trace」。不硬接 IPDOM；21-bit 控制段功能 no-op，但解码器必须提取 BSSY/BSYNC 屏障索引操作数。日后镜像 HW 微行为再升级 Hanoi 双栈（~432 B/warp，纯 timing）。
+**核心性质**：对尊重同步契约的程序，**最终架构态与组选择序无关**——每 lane 私有架构态 + 所有跨-lane 交互经显式重聚 / `membermask ⊆ active` 门控 + warp 内无屏障的内存竞争 = UB。这是闭包性质（**勘误**：原归因 Hanoi §IV；Hanoi 给出 per-PC grouping 语义本身、但无形式闭包定理，闭包的正确引用为 Habermaier & Knapp ESOP 2012 的 SIMT↔交错多线程 simulation，且其警示 min-PC 为 unfair、序无关仅对终止/无竞争程序成立），也是功能 oracle 唯一需要的性质 ⇒ 序无关性 metamorphic 测试（≥3 种确定序，断言最终态 bit 一致）即主验收门，替代「对真实硬件 trace」。不硬接 IPDOM；21-bit 控制段功能 no-op，但解码器必须提取 BSSY/BSYNC 屏障索引操作数。日后镜像 HW 微行为再升级 Hanoi 双栈（~432 B/warp，纯 timing）。
 
 ## 6. MMA + 低精度数值
 
@@ -183,6 +183,7 @@ curryGPU/
 - GPGPU-Sim manual & cuda-sim：https://gpgpu-sim.org/manual/index.php/Main_Page
 - Accel-Sim：https://mkhairy.github.io/Docs/Accel-Sim.pdf
 - Control Flow Management in Modern GPUs (Hanoi)：https://arxiv.org/html/2407.02944v1
+- SIMT 序无关闭包（功能 oracle 主门理论依据）：M. Habermaier & A. Knapp, "On the Correctness of the SIMT Execution Model of GPUs", ESOP 2012, LNCS 7211（SIMT↔交错多线程 simulation 正确性证明；min-PC unfair 警示）
 - NVArchSim “Need for Speed” (HPCA 2021)：https://d1qx31qr3h6wln.cloudfront.net/publications/HPCA_2021_NVArchSim.pdf
 - Spike / riscv-isa-sim：https://github.com/riscv-software-src/riscv-isa-sim
 - QEMU decodetree：https://www.qemu.org/docs/master/devel/decodetree.html
