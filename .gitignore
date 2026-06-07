@@ -3,3 +3,30 @@ docs/design/decisions.md
 
 # Third-party / copyrighted reference material — not for redistribution
 docs/reference_papers/
+
+.humanize/
+.claude/scheduled_tasks.lock
+
+# Local build and generated ISS artifacts
+iss/build/
+iss/dist/
+iss/*.egg-info/
+isa/.pytest_cache/
+iss/.pytest_cache/
+tests/.pytest_cache/
+__pycache__/
+*.pyc
+iss/currygpu/iss/_native*.so
+
+# Private production assets must be injected explicitly outside public artifacts
+isa/layout/production/
+isa/private_layout/
+*.cubin
+*.fatbin
+
+findings.md
+progress.md
+task_plan.md
+
+.pytest_cache/
+.claude/

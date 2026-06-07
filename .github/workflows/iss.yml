@@ -1,0 +1,48 @@
+name: ISS checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-sample:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest pybind11 scikit-build-core build
+      - name: Check repository structure
+        run: python tools/check_structure.py
+      - name: Configure ISS CMake
+        run: cmake -S iss -B iss/build/cmake -Dpybind11_DIR="$(python -m pybind11 --cmakedir)"
+      - name: Build decoder smoke test
+        run: cmake --build iss/build/cmake --target currygpu_decode_smoke _native -j2
+      - name: Run CTest
+        run: ctest --test-dir iss/build/cmake --output-on-failure
+      - name: Run Python tests
+        run: python -m pytest tests -q
+        env:
+          PYTHONPATH: isa:iss
+      - name: Build public wheel
+        run: python -m build iss --wheel --sdist --outdir iss/dist
+      - name: Check public artifacts
+        run: python tools/check_public_artifact.py iss/dist/*
+      - name: Test sdist with explicit ISA root
+        run: |
+          mkdir -p /tmp/currygpu-iss-sdist
+          tar -xzf iss/dist/*.tar.gz -C /tmp/currygpu-iss-sdist
+          cmake -S /tmp/currygpu-iss-sdist/currygpu_iss-0.1.0 -B /tmp/currygpu-iss-sdist-build -DCURRYGPU_ISA_ROOT="$PWD/isa" -Dpybind11_DIR="$(python -m pybind11 --cmakedir)"
+          cmake --build /tmp/currygpu-iss-sdist-build --target currygpu_decode_smoke _native -j2
+          ctest --test-dir /tmp/currygpu-iss-sdist-build --output-on-failure
+      - name: Test installed native wheel
+        run: |
+          python -m pip install iss/dist/*.whl --target /tmp/currygpu-iss-wheel --force-reinstall --no-deps
+          PYTHONPATH=/tmp/currygpu-iss-wheel:isa python -m pytest tests/iss/test_native.py -q
