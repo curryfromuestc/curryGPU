@@ -21,12 +21,70 @@ def _require_native():
     return _native
 
 
-def launch(program, *, num_gprs: int = 256, sched_order: str = "min_pc_first", debug_checks: bool = False):
-    return _require_native().launch(program, num_gprs, sched_order, debug_checks)
+def launch(
+    program,
+    *,
+    num_gprs: int = 256,
+    sched_order: str = "min_pc_first",
+    debug_checks: bool = False,
+    shared_mem_bytes: int = 49152,
+    local_mem_bytes: int = 16384,
+    global_allocations=None,
+    const_banks=None,
+    num_warps: int = 1,
+    warp_sched_order: str = "warp_round_robin",
+    ntid=None,
+    nctaid=None,
+    race_check: bool = False,
+):
+    return _require_native().launch(
+        program,
+        num_gprs,
+        sched_order,
+        debug_checks,
+        shared_mem_bytes,
+        local_mem_bytes,
+        global_allocations,
+        const_banks,
+        num_warps,
+        warp_sched_order,
+        ntid,
+        nctaid,
+        race_check,
+    )
 
 
-def launch_words(words, *, num_gprs: int = 256, sched_order: str = "min_pc_first", debug_checks: bool = False):
-    return _require_native().launch_words(words, num_gprs, sched_order, debug_checks)
+def launch_words(
+    words,
+    *,
+    num_gprs: int = 256,
+    sched_order: str = "min_pc_first",
+    debug_checks: bool = False,
+    shared_mem_bytes: int = 49152,
+    local_mem_bytes: int = 16384,
+    global_allocations=None,
+    const_banks=None,
+    num_warps: int = 1,
+    warp_sched_order: str = "warp_round_robin",
+    ntid=None,
+    nctaid=None,
+    race_check: bool = False,
+):
+    return _require_native().launch_words(
+        words,
+        num_gprs,
+        sched_order,
+        debug_checks,
+        shared_mem_bytes,
+        local_mem_bytes,
+        global_allocations,
+        const_banks,
+        num_warps,
+        warp_sched_order,
+        ntid,
+        nctaid,
+        race_check,
+    )
 
 
 def step(warp, max_steps: int):

@@ -13,8 +13,9 @@ class AssembleError(ValueError):
     """Raised when symbolic instruction input cannot be encoded."""
 
 
-SREG_VALUES = {"SR_LANEID": 0}
+SREG_VALUES = {name: index for index, name in enumerate(schema.SREG_CHOICES)}
 SREG_NAMES = {value: name for name, value in SREG_VALUES.items()}
+WIDTH_GROUP_REGS = {"u8": 1, "s8": 1, "u16": 1, "s16": 1, "32": 1, "64": 2, "128": 4, "256": 8}
 
 
 @dataclass(frozen=True)
@@ -96,8 +97,15 @@ def decode_like_ir(word: int, layout: Layout = SAMPLE_LAYOUT) -> Mapping[str, An
     operands = {}
     fields_by_name = schema.field_map(instruction)
     for operand in sorted(instruction.operands, key=lambda item: item.name):
-        value = field_values[operand.field] if operand.field else None
-        operands[operand.name] = _symbolize_operand(value, operand.kind, fields_by_name[operand.field])
+        if operand.field:
+            value = field_values[operand.field]
+            operands[operand.name] = _symbolize_operand(value, operand.kind, fields_by_name[operand.field])
+        else:
+            operands[operand.name] = _symbolize_operand_fields(
+                {name: field_values[name] for name in operand.fields},
+                operand,
+                fields_by_name,
+            )
     modifiers = {}
     for modifier in sorted(instruction.modifiers, key=lambda item: item.name):
         raw = field_values[modifier.field]
@@ -203,14 +211,18 @@ def _encode_fields(assembled: _AssembledInput, control: Control, layout: Instruc
     field_values["guard_pred"] = _parse_predicate(assembled.operands.pop("guard", "PT"))
     field_values["guard_neg"] = _parse_bool(assembled.operands.pop("guard_neg", False))
     for operand in instruction.operands:
-        field = fields_by_name[operand.field]
-        value = _parse_operand(assembled.operands[operand.name], operand, field)
-        field_values[operand.field] = value
+        if operand.field:
+            field = fields_by_name[operand.field]
+            value = _parse_operand(assembled.operands[operand.name], operand, field)
+            field_values[operand.field] = value
+        else:
+            field_values.update(_parse_operand_fields(assembled.operands[operand.name], operand, fields_by_name))
     for modifier in instruction.modifiers:
         modifier_values = layout.modifiers[modifier.name].values
         if assembled.modifiers[modifier.name] not in modifier_values:
             raise AssembleError(f"invalid modifier {modifier.name}={assembled.modifiers[modifier.name]}")
         field_values[modifier.field] = modifier_values[assembled.modifiers[modifier.name]]
+    _validate_instruction_constraints(instruction, assembled.operands, assembled.modifiers, field_values)
     for field in instruction.fields:
         if field.name not in field_values:
             if field.default is None:
@@ -222,7 +234,13 @@ def _encode_fields(assembled: _AssembledInput, control: Control, layout: Instruc
 
 def _parse_operand(value: Any, operand: schema.OperandSchema, field: schema.FieldSchema) -> int:
     if operand.kind == "register":
-        return _parse_register(value)
+        parsed = _parse_register(value)
+        aligned = operand.constraints.get("aligned")
+        if isinstance(aligned, int):
+            _validate_register_alignment(operand.name, parsed, aligned)
+        return parsed
+    if operand.kind == "uniform_register":
+        return _parse_uniform_register(value)
     if operand.kind == "predicate":
         return _parse_predicate(value)
     if operand.kind == "sreg":
@@ -231,6 +249,10 @@ def _parse_operand(value: Any, operand: schema.OperandSchema, field: schema.Fiel
         return parsed
     if operand.kind == "barrier":
         parsed = _parse_barrier(value)
+        _validate_integer_range("operand", operand.name, parsed, field)
+        return parsed
+    if operand.kind == "barrier_count":
+        parsed = _parse_barrier_count(value)
         _validate_integer_range("operand", operand.name, parsed, field)
         return parsed
     if operand.kind == "membermask":
@@ -247,15 +269,36 @@ def _parse_operand(value: Any, operand: schema.OperandSchema, field: schema.Fiel
     raise AssembleError(f"unsupported operand kind {operand.kind}")
 
 
+def _parse_operand_fields(value: Any, operand: schema.OperandSchema, fields_by_name: Mapping[str, schema.FieldSchema]) -> dict[str, int]:
+    if operand.kind != "address":
+        raise AssembleError(f"unsupported multi-field operand kind {operand.kind}")
+    parsed = _parse_address(value)
+    values = {
+        "addr_base": _parse_register(parsed["base"]),
+        "addr_ur": _parse_uniform_register(parsed["ur"]),
+        "addr_imm": _parse_immediate(parsed["imm"]),
+    }
+    address_bits = operand.constraints.get("address_bits")
+    if address_bits == 64:
+        _validate_register_alignment(operand.name, values["addr_base"], 2)
+    for field_name, parsed_value in values.items():
+        _validate_integer_range("operand", field_name, parsed_value, fields_by_name[field_name])
+    return values
+
+
 def _parse_field_default(value: int | str, field: schema.FieldSchema) -> int:
     if field.kind == "register":
         return _parse_register(value)
+    if field.kind == "uniform_register":
+        return _parse_uniform_register(value)
     if field.kind == "predicate":
         return _parse_predicate(value)
     if field.kind == "sreg":
         return _parse_sreg(value, None, field)
     if field.kind == "barrier":
         return _parse_barrier(value)
+    if field.kind == "barrier_count":
+        return _parse_barrier_count(value)
     if field.kind == "bool":
         return _parse_bool(value)
     return _parse_immediate(value)
@@ -276,6 +319,23 @@ def _parse_register(value: Any) -> int:
         if 0 <= parsed <= 254:
             return parsed
     raise AssembleError(f"invalid register {value}")
+
+
+def _parse_uniform_register(value: Any) -> int:
+    if isinstance(value, int):
+        if 0 <= value <= 63:
+            return value
+        raise AssembleError("uniform register index out of range")
+    if not isinstance(value, str):
+        raise AssembleError("uniform register must be an integer or symbolic name")
+    name = value.upper()
+    if name == "URZ":
+        return 255
+    if name.startswith("UR") and name[2:].isdigit():
+        parsed = int(name[2:])
+        if 0 <= parsed <= 63:
+            return parsed
+    raise AssembleError(f"invalid uniform register {value}")
 
 
 def _parse_predicate(value: Any) -> int:
@@ -326,6 +386,39 @@ def _parse_barrier(value: Any) -> int:
     raise AssembleError(f"invalid barrier {value}")
 
 
+def _parse_barrier_count(value: Any) -> int:
+    parsed = _parse_immediate(value)
+    if parsed == 0:
+        return parsed
+    if parsed % 32 != 0:
+        raise AssembleError("barrier count must be a multiple of 32")
+    return parsed
+
+
+def _parse_address(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        base = value.get("base", value.get("addr_base"))
+        if base is None:
+            raise AssembleError("address operand requires a base register")
+        return {
+            "base": base,
+            "ur": value.get("ur", value.get("uniform", value.get("addr_ur", "URZ"))),
+            "imm": value.get("imm", value.get("offset", value.get("addr_imm", 0))),
+        }
+    if isinstance(value, (tuple, list)):
+        if len(value) == 1:
+            return {"base": value[0], "ur": "URZ", "imm": 0}
+        if len(value) == 2:
+            second = value[1]
+            if isinstance(second, str) and second.upper().startswith("UR"):
+                return {"base": value[0], "ur": second, "imm": 0}
+            return {"base": value[0], "ur": "URZ", "imm": second}
+        if len(value) == 3:
+            return {"base": value[0], "ur": value[1], "imm": value[2]}
+        raise AssembleError("address operand must have one to three items")
+    return {"base": value, "ur": "URZ", "imm": 0}
+
+
 def _parse_bool(value: Any) -> int:
     if isinstance(value, bool):
         return int(value)
@@ -349,6 +442,38 @@ def _validate_integer_range(owner: str, name: str, value: int, field: schema.Fie
         hi = (1 << field.width) - 1
     if value < lo or value > hi:
         raise AssembleError(f"{owner}.{name} value {value} outside range [{lo}, {hi}]")
+
+
+def _validate_register_alignment(name: str, value: int, alignment: int) -> None:
+    if value == 255:
+        return
+    if value % alignment != 0:
+        raise AssembleError(f"register operand {name} must be {alignment}-aligned")
+
+
+def _validate_instruction_constraints(
+    instruction: schema.InstructionSchema,
+    operands: Mapping[str, Any],
+    modifiers: Mapping[str, str],
+    field_values: Mapping[str, int],
+) -> None:
+    width = modifiers.get("width")
+    if width is not None:
+        group = WIDTH_GROUP_REGS[width]
+        for field_name in ("rd", "src"):
+            if field_name in field_values:
+                _validate_register_alignment(field_name, field_values[field_name], group)
+    if instruction.name == "BAR":
+        mode = modifiers.get("mode", "sync")
+        count = field_values["count"]
+        if mode == "arv" and count == 0:
+            raise AssembleError("BAR.ARV requires an explicit nonzero count")
+    if instruction.name in {"ATOM", "ATOMG", "ATOMS", "RED", "REDG", "REDS"}:
+        op = modifiers.get("op", "add")
+        if op == "cas":
+            cmp_value = field_values.get("cmp", 255)
+            if cmp_value == 255:
+                raise AssembleError("CAS requires a compare register")
 
 
 def _to_unsigned(value: int, width: int) -> int:
@@ -385,6 +510,8 @@ def _validate_reserved_bits(word: int, layout: InstructionLayout) -> None:
 def _symbolize_operand(value: int, kind: str, field: schema.FieldSchema) -> int | str:
     if kind == "register":
         return _register_name(value)
+    if kind == "uniform_register":
+        return _uniform_register_name(value)
     if kind == "predicate":
         return _predicate_name(value)
     if kind == "sreg":
@@ -396,12 +523,35 @@ def _symbolize_operand(value: int, kind: str, field: schema.FieldSchema) -> int 
     return value
 
 
+def _symbolize_operand_fields(
+    values: Mapping[str, int],
+    operand: schema.OperandSchema,
+    fields_by_name: Mapping[str, schema.FieldSchema],
+) -> dict[str, int | str]:
+    if operand.kind != "address":
+        raise AssembleError(f"unsupported multi-field operand kind {operand.kind}")
+    del fields_by_name
+    return {
+        "base": _register_name(values["addr_base"]),
+        "ur": _uniform_register_name(values["addr_ur"]),
+        "imm": values["addr_imm"],
+    }
+
+
 def _register_name(value: int) -> str:
     if value == 255:
         return "RZ"
     if 0 <= value <= 254:
         return f"R{value}"
     raise AssembleError("decoded register index is invalid")
+
+
+def _uniform_register_name(value: int) -> str:
+    if value == 255:
+        return "URZ"
+    if 0 <= value <= 63:
+        return f"UR{value}"
+    raise AssembleError("decoded uniform register index is invalid")
 
 
 def _predicate_name(value: int) -> str:

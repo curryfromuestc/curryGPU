@@ -134,7 +134,7 @@ Python `encoding_table.py`（schema）+ 样例 `layout` → `gen_decoder.py` 生
   - Source DEC: DEC-1
   - Current-loop handoff: AC-5（per-lane `pc[32]` + per-thread next-PC 基础设施 + `lane_state[32]` 在非分歧下被走到；EXIT 清 active mask）与 AC-6（状态快照内存在但默认的 `Bx` 屏障字段 + 保留的 divergence-events 计数器）。
   - Promotion trigger: 地基循环全绿；ITS 循环启动时。
-- FUT-2：阶段 ③ 内存与同步 —— `memory_space` 抽象基类 + `memory_space_impl`（4KB 块稀疏 hashmap）覆盖 global/shared/local、CTA barrier、atomics（单线程序列化 RMW）、以及 ordering/barrier 的负向误用测试。
+- FUT-2：阶段 ③ 内存与同步 —— `memory_space` 抽象基类 + `memory_space_impl`（4KB 块稀疏 hashmap）覆盖 global/shared/local，并经阶段③用户裁定扩张到只读 const（`LDC` bank-indexed、launch 注入、snapshot 顶层 `const_memory`，`memory` 子树仍保持 global/shared/local 三键）、CTA barrier、atomics（单线程序列化 RMW）、以及 ordering/barrier 的负向误用测试。
   - Source DEC: DEC-1
   - Current-loop handoff: AC-6（内存空间在状态契约中存在但为空、`mem-ops==0`；FUT-2 为其填入字节与 load/store 语义）。
   - Promotion trigger: ITS 循环全绿。

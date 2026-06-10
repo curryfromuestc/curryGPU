@@ -45,9 +45,12 @@ add_custom_target(currygpu_iss_codegen
 add_executable(currygpu_decode_smoke tests/cpp/decode_smoke.cpp "${CURRYGPU_GENERATED_DIR}/decode.gen.cpp")
 target_include_directories(currygpu_decode_smoke PRIVATE "${CURRYGPU_GENERATED_DIR}")
 
-pybind11_add_module(_native binding/native.cpp "${CURRYGPU_GENERATED_DIR}/decode.gen.cpp")
+add_executable(currygpu_memory_space_smoke tests/cpp/memory_space_smoke.cpp binding/memory_space.cpp)
+target_include_directories(currygpu_memory_space_smoke PRIVATE binding)
+
+pybind11_add_module(_native binding/native.cpp binding/memory_space.cpp binding/cta_barrier.cpp binding/atomic_ops.cpp binding/race_shadow.cpp "${CURRYGPU_GENERATED_DIR}/decode.gen.cpp")
 add_dependencies(_native currygpu_iss_codegen)
-target_include_directories(_native PRIVATE "${CURRYGPU_GENERATED_DIR}")
+target_include_directories(_native PRIVATE "${CURRYGPU_GENERATED_DIR}" binding)
 set_target_properties(_native PROPERTIES OUTPUT_NAME "_native")
 add_custom_command(TARGET _native POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:_native>" "${CMAKE_CURRENT_SOURCE_DIR}/currygpu/iss/$<TARGET_FILE_NAME:_native>"
@@ -57,3 +60,4 @@ install(TARGETS _native LIBRARY DESTINATION currygpu/iss)
 
 enable_testing()
 add_test(NAME currygpu_decode_smoke COMMAND currygpu_decode_smoke)
+add_test(NAME currygpu_memory_space_smoke COMMAND currygpu_memory_space_smoke)

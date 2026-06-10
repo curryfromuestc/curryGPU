@@ -16,6 +16,17 @@ ARCH_STATE_KEYS = (
     "memory",
     "bx",
     "trap",
+    "cta_barriers",
+)
+
+WARP_STATE_KEYS = (
+    "active_mask",
+    "pc",
+    "lane_state",
+    "vgpr",
+    "predicates",
+    "uniform_registers",
+    "bx",
 )
 
 SCHED_ORDERS = ("min_pc_first", "max_pc_first", "round_robin", "oldest_group_first")
@@ -28,6 +39,8 @@ class CorpusCase:
     expected_status: str = "well_formed"
     expected_divergent: bool = True
     tags: tuple[str, ...] = ()
+    launch_kwargs: dict[str, Any] | None = None
+    max_steps: int = 200
 
 
 class KernelBuilder:
@@ -67,6 +80,22 @@ class KernelBuilder:
 
 
 def architectural_subset(snapshot: dict[str, Any]) -> dict[str, Any]:
+    if "ctas" in snapshot:
+        return {
+            "ctas": [architectural_subset(cta) for cta in snapshot["ctas"]],
+            "memory": snapshot["memory"],
+            "trap": snapshot["trap"],
+        }
+    if "warps" in snapshot:
+        return {
+            "warps": [
+                {key: warp[key] for key in WARP_STATE_KEYS}
+                for warp in snapshot["warps"]
+            ],
+            "memory": snapshot["memory"],
+            "trap": snapshot["trap"],
+            "cta_barriers": snapshot["cta_barriers"],
+        }
     return {key: snapshot[key] for key in ARCH_STATE_KEYS}
 
 
@@ -87,6 +116,15 @@ def corpus_cases() -> tuple[CorpusCase, ...]:
         _causal_mask_control_divergent_case(),
         _yield_arrival_case(),
         _collective_placement_negative_case(),
+        _barrier_shared_exchange_case(),
+        _atomic_red_add_case(),
+        _order_sensitive_exch_case(),
+        _progress_spinlock_case(),
+        _progress_consumer_first_case(),
+        _global_memory_roundtrip_case(),
+        _const_read_case(),
+        _grid_independent_case(),
+        _race_negative_case(),
     )
 
 
@@ -239,4 +277,164 @@ def _collective_placement_negative_case() -> CorpusCase:
         expected_status="reject_static",
         expected_divergent=False,
         tags=("negative_control", "k2"),
+    )
+
+
+def _barrier_shared_exchange_case() -> CorpusCase:
+    kb = KernelBuilder()
+    kb.emit("S2R", "R1", "SR_WARPID")
+    kb.emit("S2R", "R4", "SR_LANEID")
+    kb.emit("IADD3", "R2", "R1", "RZ", 1)
+    kb.emit("ISETP", "P0", "R1", "RZ", cmp="eq")
+    kb.emit("STS", "R2", "R4", width="u8", guard="P0")
+    kb.emit("BAR", "B0", mode="sync")
+    kb.emit("LDS", "R3", "R4", width="u8")
+    kb.emit("EXIT")
+    return CorpusCase(
+        "barrier_shared_exchange",
+        kb.words(),
+        expected_divergent=False,
+        tags=("barrier_drf", "memory", "multi_warp"),
+        launch_kwargs={"num_warps": 2, "ntid": (64, 1, 1)},
+    )
+
+
+def _atomic_red_add_case() -> CorpusCase:
+    kb = KernelBuilder()
+    kb.emit("IADD3", "R1", "RZ", "RZ", 1)
+    kb.emit("REDG", ("RZ", 0), "R1", op="add")
+    kb.emit("EXIT")
+    return CorpusCase(
+        "atomic_red_add",
+        kb.words(),
+        expected_divergent=False,
+        tags=("atomic_commutative", "memory", "multi_warp"),
+        launch_kwargs={"num_warps": 2, "ntid": (64, 1, 1), "global_allocations": [(0, 4)]},
+    )
+
+
+def _order_sensitive_exch_case() -> CorpusCase:
+    kb = KernelBuilder()
+    kb.emit("S2R", "R1", "SR_WARPID")
+    kb.emit("IADD3", "R1", "R1", "RZ", 1)
+    kb.emit("ATOMG", "R4", ("RZ", 0), "R1", op="exch")
+    kb.emit("EXIT")
+    return CorpusCase(
+        "order_sensitive_exch",
+        kb.words(),
+        expected_divergent=False,
+        tags=("order_sensitive", "memory", "multi_warp"),
+        launch_kwargs={"num_warps": 2, "ntid": (64, 1, 1), "global_allocations": [(0, 4)]},
+    )
+
+
+def _progress_spinlock_case() -> CorpusCase:
+    kb = KernelBuilder()
+    kb.emit("S2R", "R1", "SR_WARPID")
+    kb.emit("ISETP", "P0", "R1", "RZ", cmp="eq")
+    kb.emit("IADD3", "R2", "RZ", "RZ", 1)
+    kb.emit("REDG", ("RZ", 0), "R2", op="add", guard="P0")
+    kb.label("spin")
+    kb.emit("LDG", "R3", ("RZ", 0), width="32", guard="P0", guard_neg=True)
+    kb.emit("ISETP", "P1", "R3", "RZ", cmp="eq", guard="P0", guard_neg=True)
+    kb.emit("BRA", "@spin", guard="P1")
+    kb.emit("EXIT")
+    return CorpusCase(
+        "progress_spinlock",
+        kb.words(),
+        expected_divergent=False,
+        tags=("progress_test", "memory", "multi_warp"),
+        launch_kwargs={
+            "num_warps": 2,
+            "ntid": (64, 1, 1),
+            "warp_sched_order": "warp_round_robin",
+            "global_allocations": [(0, 4)],
+        },
+        max_steps=2000,
+    )
+
+
+def _progress_consumer_first_case() -> CorpusCase:
+    kb = KernelBuilder()
+    kb.emit("S2R", "R1", "SR_WARPID")
+    kb.emit("ISETP", "P0", "R1", "RZ", cmp="eq")
+    kb.emit("IADD3", "R2", "RZ", "RZ", 1)
+    kb.emit("REDG", ("RZ", 0), "R2", op="add", guard="P0", guard_neg=True)
+    kb.label("spin")
+    kb.emit("LDG", "R3", ("RZ", 0), width="32", guard="P0")
+    kb.emit("ISETP", "P1", "R3", "RZ", cmp="eq", guard="P0")
+    kb.emit("BRA", "@spin", guard="P1")
+    kb.emit("EXIT")
+    return CorpusCase(
+        "progress_consumer_first",
+        kb.words(),
+        expected_divergent=False,
+        tags=("progress_test", "memory", "multi_warp", "consumer_first"),
+        launch_kwargs={
+            "num_warps": 2,
+            "ntid": (64, 1, 1),
+            "warp_sched_order": "warp_round_robin",
+            "global_allocations": [(0, 4)],
+        },
+        max_steps=2000,
+    )
+
+
+def _global_memory_roundtrip_case() -> CorpusCase:
+    kb = KernelBuilder()
+    kb.emit("IADD3", "R1", "RZ", "RZ", 7)
+    kb.emit("STG", "R1", ("RZ", 0), width="u8")
+    kb.emit("LDG", "R2", ("RZ", 0), width="u8")
+    kb.emit("EXIT")
+    return CorpusCase(
+        "global_memory_roundtrip",
+        kb.words(),
+        expected_divergent=False,
+        tags=("barrier_drf", "memory"),
+        launch_kwargs={"global_allocations": [(0, 1)]},
+    )
+
+
+def _const_read_case() -> CorpusCase:
+    kb = KernelBuilder()
+    kb.emit("LDC", "R8", 2, ("RZ", 0), width="64")
+    kb.emit("EXIT")
+    return CorpusCase(
+        "const_read",
+        kb.words(),
+        expected_divergent=False,
+        tags=("barrier_drf", "const"),
+        launch_kwargs={"const_banks": {2: bytes([1, 2, 3, 4, 5, 6, 7, 8])}},
+    )
+
+
+def _grid_independent_case() -> CorpusCase:
+    kb = KernelBuilder()
+    kb.emit("S2R", "R4", "SR_CTAID.X")
+    kb.emit("IADD3", "R2", "R4", "RZ", 1)
+    kb.emit("STG", "R2", "R4", width="u8")
+    kb.emit("STS", "R2", ("RZ", 0), width="u8")
+    kb.emit("EXIT")
+    return CorpusCase(
+        "grid_independent",
+        kb.words(),
+        expected_divergent=False,
+        tags=("grid", "memory"),
+        launch_kwargs={"nctaid": (2, 1, 1), "global_allocations": [(0, 2)]},
+    )
+
+
+def _race_negative_case() -> CorpusCase:
+    kb = KernelBuilder()
+    kb.emit("S2R", "R1", "SR_WARPID")
+    kb.emit("S2R", "R4", "SR_LANEID")
+    kb.emit("IADD3", "R2", "R1", "RZ", 1)
+    kb.emit("STG", "R2", "R4", width="u8")
+    kb.emit("EXIT")
+    return CorpusCase(
+        "race_cross_warp_store",
+        kb.words(),
+        expected_divergent=False,
+        tags=("race_negative", "memory", "multi_warp"),
+        launch_kwargs={"num_warps": 2, "ntid": (64, 1, 1), "global_allocations": [(0, 32)]},
     )

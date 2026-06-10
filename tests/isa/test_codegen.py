@@ -25,24 +25,49 @@ def test_generate_all_outputs_stable_ir_and_sources() -> None:
     ir = json.loads(first.ir_json)
     assert ir["word_bits"] == 128
     assert "layout" not in ir
-    assert [item["name"] for item in ir["instructions"]] == [
+    assert [item["name"] for item in ir["instructions"]] == sorted(
+        [
+            "ATOM",
+            "ATOMG",
+            "ATOMS",
+            "BAR",
+            "BRA",
+            "BREAK",
+            "BSSY",
+            "BSYNC",
+            "CVTA",
+            "ELECT",
+            "EXIT",
+            "FENCE",
+            "IADD3",
+            "ISETP",
+            "LD",
+            "LDC",
+            "LDG",
+            "LDL",
+            "LDS",
+            "LOP3",
+            "MEMBAR",
+            "RED",
+            "REDG",
+            "REDS",
+            "S2R",
+            "ST",
+            "STG",
+            "STL",
+            "STS",
+            "VOTE",
+            "YIELD",
+        ]
+    )
+    assert [item["name"] for item in ir["instructions"] if item["name"] in {"BRA", "BREAK"}] == [
         "BRA",
         "BREAK",
-        "BSSY",
-        "BSYNC",
-        "ELECT",
-        "EXIT",
-        "IADD3",
-        "ISETP",
-        "LOP3",
-        "S2R",
-        "VOTE",
-        "YIELD",
     ]
     s2r = next(item for item in ir["instructions"] if item["name"] == "S2R")
     assert next(operand for operand in s2r["operands"] if operand["name"] == "sr")["kind"] == "sreg"
-    assert next(field for field in s2r["fields"] if field["name"] == "sr")["choices"] == ["SR_LANEID"]
-    assert next(operand for operand in schema.INSTRUCTION_BY_NAME["S2R"].operands if operand.name == "sr").choices == ("SR_LANEID",)
+    assert next(field for field in s2r["fields"] if field["name"] == "sr")["choices"] == list(schema.SREG_CHOICES)
+    assert next(operand for operand in schema.INSTRUCTION_BY_NAME["S2R"].operands if operand.name == "sr").choices == schema.SREG_CHOICES
     assert {item["name"] for item in ir["aliases"]} == {"MOV"}
     assert ir["control"]["width"] == 21
     assert "lsb" not in ir["control"]

@@ -82,11 +82,122 @@ def modifier_map(instruction: InstructionSchema) -> Mapping[str, ModifierSchema]
     return MappingProxyType({modifier.name: modifier for modifier in instruction.modifiers})
 
 
+SREG_CHOICES = (
+    "SR_LANEID",
+    "SR_TID.X",
+    "SR_TID.Y",
+    "SR_TID.Z",
+    "SR_NTID.X",
+    "SR_NTID.Y",
+    "SR_NTID.Z",
+    "SR_CTAID.X",
+    "SR_CTAID.Y",
+    "SR_CTAID.Z",
+    "SR_NCTAID.X",
+    "SR_NCTAID.Y",
+    "SR_NCTAID.Z",
+    "SR_WARPID",
+    "SR_NWARPID",
+)
+
+MEM_WIDTH_CHOICES = ("u8", "s8", "u16", "s16", "32", "64", "128", "256")
+ATOMIC_OP_CHOICES = ("add", "min", "max", "inc", "dec", "and", "or", "xor", "exch", "cas")
+BAR_MODE_CHOICES = ("sync", "arv")
+MEM_SCOPE_CHOICES = ("cta", "sm", "gpu", "sys")
+MEM_ORDER_CHOICES = ("sc", "acquire", "release", "acq_rel")
+CVTA_DIRECTION_CHOICES = ("to_global", "to_shared", "to_local", "from_global", "from_shared", "from_local")
+
+
 def _base_fields(extra: Sequence[FieldSchema]) -> tuple[FieldSchema, ...]:
     return (
         FieldSchema("guard_pred", 3, "predicate", default="PT"),
         FieldSchema("guard_neg", 1, "bool", default=0),
         *extra,
+    )
+
+
+def _address_fields() -> tuple[FieldSchema, ...]:
+    return (
+        FieldSchema("addr_base", 8, "register"),
+        FieldSchema("addr_ur", 8, "uniform_register", default="URZ"),
+        FieldSchema("addr_imm", 20, "immediate", signed=True, default=0),
+    )
+
+
+def _address_operand(*, address_bits: int) -> OperandSchema:
+    return OperandSchema(
+        "addr",
+        "address",
+        fields=("addr_base", "addr_ur", "addr_imm"),
+        constraints=MappingProxyType({"address_bits": address_bits}),
+    )
+
+
+def _width_modifier() -> ModifierSchema:
+    return ModifierSchema("width", "width", MEM_WIDTH_CHOICES, "32")
+
+
+def _memory_load(name: str, semantics: str, *, address_bits: int = 32) -> InstructionSchema:
+    return InstructionSchema(
+        name=name,
+        fields=_base_fields((FieldSchema("rd", 8, "register"), *_address_fields(), FieldSchema("width", 3, "modifier", default=4))),
+        operands=(OperandSchema("rd", "register", "rd"), _address_operand(address_bits=address_bits)),
+        modifiers=(_width_modifier(),),
+        semantics=semantics,
+    )
+
+
+def _memory_store(name: str, semantics: str, *, address_bits: int = 32) -> InstructionSchema:
+    return InstructionSchema(
+        name=name,
+        fields=_base_fields((FieldSchema("src", 8, "register"), *_address_fields(), FieldSchema("width", 3, "modifier", default=4))),
+        operands=(OperandSchema("src", "register", "src"), _address_operand(address_bits=address_bits)),
+        modifiers=(_width_modifier(),),
+        semantics=semantics,
+    )
+
+
+def _atomic_instruction(name: str, semantics: str) -> InstructionSchema:
+    return InstructionSchema(
+        name=name,
+        fields=_base_fields(
+            (
+                FieldSchema("rd", 8, "register", default="RZ"),
+                FieldSchema("src", 8, "register"),
+                FieldSchema("cmp", 8, "register", default="RZ"),
+                *_address_fields(),
+                FieldSchema("op", 4, "modifier", default=0),
+            )
+        ),
+        operands=(
+            OperandSchema("rd", "register", "rd", required=False, default="RZ"),
+            _address_operand(address_bits=64 if name in {"ATOM", "ATOMG"} else 32),
+            OperandSchema("src", "register", "src"),
+            OperandSchema("cmp", "register", "cmp", required=False, default="RZ"),
+        ),
+        modifiers=(ModifierSchema("op", "op", ATOMIC_OP_CHOICES, "add"),),
+        semantics=semantics,
+    )
+
+
+def _red_instruction(name: str, semantics: str) -> InstructionSchema:
+    return InstructionSchema(
+        name=name,
+        fields=_base_fields(
+            (
+                FieldSchema("src", 8, "register"),
+                FieldSchema("cmp", 8, "register", default="RZ"),
+                *_address_fields(),
+                FieldSchema("op", 4, "modifier", default=0),
+            )
+        ),
+        operands=(
+            _address_operand(address_bits=64 if name in {"RED", "REDG"} else 32),
+            OperandSchema("src", "register", "src"),
+            OperandSchema("cmp", "register", "cmp", required=False, default="RZ"),
+        ),
+        modifiers=(ModifierSchema("op", "op", ATOMIC_OP_CHOICES, "add"),),
+        semantics=semantics,
     )
 
 
@@ -180,12 +291,12 @@ INSTRUCTIONS = (
         fields=_base_fields(
             (
                 FieldSchema("rd", 8, "register"),
-                FieldSchema("sr", 8, "sreg", choices=("SR_LANEID",)),
+                FieldSchema("sr", 8, "sreg", choices=SREG_CHOICES),
             )
         ),
         operands=(
             OperandSchema("rd", "register", "rd"),
-            OperandSchema("sr", "sreg", "sr", choices=("SR_LANEID",)),
+            OperandSchema("sr", "sreg", "sr", choices=SREG_CHOICES),
         ),
         semantics="s2r",
     ),
@@ -275,6 +386,100 @@ INSTRUCTIONS = (
         fields=_base_fields(()),
         operands=(),
         semantics="exit",
+    ),
+    _memory_load("LDG", "ld_global", address_bits=64),
+    _memory_store("STG", "st_global", address_bits=64),
+    _memory_load("LDS", "ld_shared"),
+    _memory_store("STS", "st_shared"),
+    _memory_load("LDL", "ld_local"),
+    _memory_store("STL", "st_local"),
+    _memory_load("LD", "ld_generic", address_bits=64),
+    _memory_store("ST", "st_generic", address_bits=64),
+    InstructionSchema(
+        name="LDC",
+        fields=_base_fields(
+            (
+                FieldSchema("rd", 8, "register"),
+                FieldSchema("bank", 8, "immediate"),
+                *_address_fields(),
+                FieldSchema("width", 3, "modifier", default=4),
+            )
+        ),
+        operands=(
+            OperandSchema("rd", "register", "rd"),
+            OperandSchema("bank", "immediate", "bank"),
+            _address_operand(address_bits=32),
+        ),
+        modifiers=(_width_modifier(),),
+        semantics="ld_const",
+    ),
+    _atomic_instruction("ATOM", "atomic_generic"),
+    _atomic_instruction("ATOMG", "atomic_global"),
+    _atomic_instruction("ATOMS", "atomic_shared"),
+    _red_instruction("RED", "red_generic"),
+    _red_instruction("REDG", "red_global"),
+    _red_instruction("REDS", "red_shared"),
+    InstructionSchema(
+        name="BAR",
+        fields=_base_fields(
+            (
+                FieldSchema("bar", 4, "barrier"),
+                FieldSchema("count", 16, "barrier_count", default=0),
+                FieldSchema("mode", 1, "modifier", default=0),
+            )
+        ),
+        operands=(
+            OperandSchema("bar", "barrier", "bar"),
+            OperandSchema("count", "barrier_count", "count", required=False, default=0),
+        ),
+        modifiers=(ModifierSchema("mode", "mode", BAR_MODE_CHOICES, "sync"),),
+        semantics="bar",
+    ),
+    InstructionSchema(
+        name="MEMBAR",
+        fields=_base_fields(
+            (
+                FieldSchema("scope", 2, "modifier", default=2),
+                FieldSchema("order", 2, "modifier", default=0),
+            )
+        ),
+        operands=(),
+        modifiers=(
+            ModifierSchema("scope", "scope", MEM_SCOPE_CHOICES, "gpu"),
+            ModifierSchema("order", "order", MEM_ORDER_CHOICES, "sc"),
+        ),
+        semantics="membar",
+    ),
+    InstructionSchema(
+        name="FENCE",
+        fields=_base_fields(
+            (
+                FieldSchema("scope", 2, "modifier", default=2),
+                FieldSchema("order", 2, "modifier", default=0),
+            )
+        ),
+        operands=(),
+        modifiers=(
+            ModifierSchema("scope", "scope", MEM_SCOPE_CHOICES, "gpu"),
+            ModifierSchema("order", "order", MEM_ORDER_CHOICES, "sc"),
+        ),
+        semantics="fence",
+    ),
+    InstructionSchema(
+        name="CVTA",
+        fields=_base_fields(
+            (
+                FieldSchema("rd", 8, "register"),
+                FieldSchema("src", 8, "register"),
+                FieldSchema("direction", 3, "modifier", default=0),
+            )
+        ),
+        operands=(
+            OperandSchema("rd", "register", "rd", constraints=MappingProxyType({"aligned": 2})),
+            OperandSchema("src", "register", "src", constraints=MappingProxyType({"aligned": 2})),
+        ),
+        modifiers=(ModifierSchema("direction", "direction", CVTA_DIRECTION_CHOICES, "to_global"),),
+        semantics="cvta",
     ),
 )
 
