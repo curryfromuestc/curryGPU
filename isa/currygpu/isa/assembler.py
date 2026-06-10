@@ -13,6 +13,10 @@ class AssembleError(ValueError):
     """Raised when symbolic instruction input cannot be encoded."""
 
 
+SREG_VALUES = {"SR_LANEID": 0}
+SREG_NAMES = {value: name for name, value in SREG_VALUES.items()}
+
+
 @dataclass(frozen=True)
 class EncodedInstruction:
     word: int
@@ -221,6 +225,18 @@ def _parse_operand(value: Any, operand: schema.OperandSchema, field: schema.Fiel
         return _parse_register(value)
     if operand.kind == "predicate":
         return _parse_predicate(value)
+    if operand.kind == "sreg":
+        parsed = _parse_sreg(value, operand, field)
+        _validate_integer_range("operand", operand.name, parsed, field)
+        return parsed
+    if operand.kind == "barrier":
+        parsed = _parse_barrier(value)
+        _validate_integer_range("operand", operand.name, parsed, field)
+        return parsed
+    if operand.kind == "membermask":
+        parsed = _parse_immediate(value)
+        _validate_integer_range("operand", operand.name, parsed, field)
+        return parsed
     if operand.kind == "immediate":
         parsed = _parse_immediate(value)
         aligned = operand.constraints.get("aligned")
@@ -236,6 +252,10 @@ def _parse_field_default(value: int | str, field: schema.FieldSchema) -> int:
         return _parse_register(value)
     if field.kind == "predicate":
         return _parse_predicate(value)
+    if field.kind == "sreg":
+        return _parse_sreg(value, None, field)
+    if field.kind == "barrier":
+        return _parse_barrier(value)
     if field.kind == "bool":
         return _parse_bool(value)
     return _parse_immediate(value)
@@ -273,6 +293,37 @@ def _parse_predicate(value: Any) -> int:
         if 0 <= parsed <= 6:
             return parsed
     raise AssembleError(f"invalid predicate {value}")
+
+
+def _parse_sreg(value: Any, operand: schema.OperandSchema | None, field: schema.FieldSchema) -> int:
+    choices = (operand.choices if operand is not None else ()) or field.choices
+    allowed = set(choices) if choices else set(SREG_VALUES)
+    if isinstance(value, int):
+        name = SREG_NAMES.get(value)
+        if name in allowed:
+            return value
+        raise AssembleError("invalid special register selector")
+    if not isinstance(value, str):
+        raise AssembleError("special register must be symbolic")
+    name = value.upper()
+    if name not in allowed or name not in SREG_VALUES:
+        raise AssembleError(f"invalid special register {value}")
+    return SREG_VALUES[name]
+
+
+def _parse_barrier(value: Any) -> int:
+    if isinstance(value, int):
+        if 0 <= value <= 15:
+            return value
+        raise AssembleError("barrier index out of range")
+    if not isinstance(value, str):
+        raise AssembleError("barrier must be an integer or symbolic name")
+    name = value.upper()
+    if name.startswith("B") and name[1:].isdigit():
+        parsed = int(name[1:])
+        if 0 <= parsed <= 15:
+            return parsed
+    raise AssembleError(f"invalid barrier {value}")
 
 
 def _parse_bool(value: Any) -> int:
@@ -336,6 +387,10 @@ def _symbolize_operand(value: int, kind: str, field: schema.FieldSchema) -> int 
         return _register_name(value)
     if kind == "predicate":
         return _predicate_name(value)
+    if kind == "sreg":
+        return _sreg_name(value, field)
+    if kind == "barrier":
+        return _barrier_name(value)
     if field.signed:
         return value
     return value
@@ -355,6 +410,19 @@ def _predicate_name(value: int) -> str:
     if 0 <= value <= 6:
         return f"P{value}"
     raise AssembleError("decoded predicate index is invalid")
+
+
+def _sreg_name(value: int, field: schema.FieldSchema) -> str:
+    name = SREG_NAMES.get(value)
+    if name is not None and (not field.choices or name in field.choices):
+        return name
+    raise AssembleError("decoded special register selector is invalid")
+
+
+def _barrier_name(value: int) -> str:
+    if 0 <= value <= 15:
+        return f"B{value}"
+    raise AssembleError("decoded barrier index is invalid")
 
 
 def _modifier_name(modifier: schema.ModifierSchema, modifier_layout, raw: int) -> str:

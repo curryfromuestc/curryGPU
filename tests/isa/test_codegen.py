@@ -25,7 +25,24 @@ def test_generate_all_outputs_stable_ir_and_sources() -> None:
     ir = json.loads(first.ir_json)
     assert ir["word_bits"] == 128
     assert "layout" not in ir
-    assert [item["name"] for item in ir["instructions"]] == ["BRA", "EXIT", "IADD3", "ISETP", "LOP3"]
+    assert [item["name"] for item in ir["instructions"]] == [
+        "BRA",
+        "BREAK",
+        "BSSY",
+        "BSYNC",
+        "ELECT",
+        "EXIT",
+        "IADD3",
+        "ISETP",
+        "LOP3",
+        "S2R",
+        "VOTE",
+        "YIELD",
+    ]
+    s2r = next(item for item in ir["instructions"] if item["name"] == "S2R")
+    assert next(operand for operand in s2r["operands"] if operand["name"] == "sr")["kind"] == "sreg"
+    assert next(field for field in s2r["fields"] if field["name"] == "sr")["choices"] == ["SR_LANEID"]
+    assert next(operand for operand in schema.INSTRUCTION_BY_NAME["S2R"].operands if operand.name == "sr").choices == ("SR_LANEID",)
     assert {item["name"] for item in ir["aliases"]} == {"MOV"}
     assert ir["control"]["width"] == 21
     assert "lsb" not in ir["control"]
@@ -149,6 +166,16 @@ def test_missing_instruction_binding_is_rejected() -> None:
         codegen.build_ir(layout)
 
 
+def test_s2r_missing_instruction_binding_is_rejected() -> None:
+    layout = replace(
+        SAMPLE_LAYOUT,
+        instructions=tuple(item for item in SAMPLE_LAYOUT.instructions if item.name != "S2R"),
+    )
+
+    with pytest.raises(codegen.CodegenError, match="missing binding.*S2R"):
+        codegen.build_ir(layout)
+
+
 def test_opcode_overlap_is_rejected_symbolically() -> None:
     iadd3 = next(item for item in SAMPLE_LAYOUT.instructions if item.name == "IADD3")
     isetp = next(item for item in SAMPLE_LAYOUT.instructions if item.name == "ISETP")
@@ -156,6 +183,19 @@ def test_opcode_overlap_is_rejected_symbolically() -> None:
     layout = replace(
         SAMPLE_LAYOUT,
         instructions=tuple(overlapping if item.name == "ISETP" else item for item in SAMPLE_LAYOUT.instructions),
+    )
+
+    with pytest.raises(codegen.CodegenError, match="overlap"):
+        codegen.build_ir(layout)
+
+
+def test_new_instruction_opcode_overlap_is_rejected_symbolically() -> None:
+    iadd3 = next(item for item in SAMPLE_LAYOUT.instructions if item.name == "IADD3")
+    s2r = next(item for item in SAMPLE_LAYOUT.instructions if item.name == "S2R")
+    overlapping = replace(s2r, opcode=iadd3.opcode)
+    layout = replace(
+        SAMPLE_LAYOUT,
+        instructions=tuple(overlapping if item.name == "S2R" else item for item in SAMPLE_LAYOUT.instructions),
     )
 
     with pytest.raises(codegen.CodegenError, match="overlap"):
@@ -170,6 +210,48 @@ def test_field_bit_conflict_is_rejected() -> None:
     layout = replace(
         SAMPLE_LAYOUT,
         instructions=tuple(bad_iadd3 if item.name == "IADD3" else item for item in SAMPLE_LAYOUT.instructions),
+    )
+
+    with pytest.raises(codegen.CodegenError, match="claimed by both"):
+        codegen.build_ir(layout)
+
+
+def test_s2r_selector_field_conflict_is_rejected() -> None:
+    s2r = next(item for item in SAMPLE_LAYOUT.instructions if item.name == "S2R")
+    bad_fields = dict(s2r.fields)
+    bad_fields["sr"] = FieldLayout(bad_fields["rd"].lsb, bad_fields["sr"].width)
+    bad_s2r = replace(s2r, fields=bad_fields)
+    layout = replace(
+        SAMPLE_LAYOUT,
+        instructions=tuple(bad_s2r if item.name == "S2R" else item for item in SAMPLE_LAYOUT.instructions),
+    )
+
+    with pytest.raises(codegen.CodegenError, match="claimed by both"):
+        codegen.build_ir(layout)
+
+
+def test_s2r_selector_field_overflow_is_rejected() -> None:
+    s2r = next(item for item in SAMPLE_LAYOUT.instructions if item.name == "S2R")
+    bad_fields = dict(s2r.fields)
+    bad_fields["sr"] = FieldLayout(124, bad_fields["sr"].width)
+    bad_s2r = replace(s2r, fields=bad_fields)
+    layout = replace(
+        SAMPLE_LAYOUT,
+        instructions=tuple(bad_s2r if item.name == "S2R" else item for item in SAMPLE_LAYOUT.instructions),
+    )
+
+    with pytest.raises(codegen.CodegenError, match="overflows"):
+        codegen.build_ir(layout)
+
+
+def test_instruction_fields_must_not_claim_control_segment() -> None:
+    elect = next(item for item in SAMPLE_LAYOUT.instructions if item.name == "ELECT")
+    bad_fields = dict(elect.fields)
+    bad_fields["membermask"] = FieldLayout(80, bad_fields["membermask"].width)
+    bad_elect = replace(elect, fields=bad_fields)
+    layout = replace(
+        SAMPLE_LAYOUT,
+        instructions=tuple(bad_elect if item.name == "ELECT" else item for item in SAMPLE_LAYOUT.instructions),
     )
 
     with pytest.raises(codegen.CodegenError, match="claimed by both"):

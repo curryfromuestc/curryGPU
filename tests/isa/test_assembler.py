@@ -43,13 +43,51 @@ def test_sample_subset_roundtrips() -> None:
         ("ISETP", ("P1", "R2", "R3"), {"cmp": "ge"}),
         ("LOP3", ("R5", "R6", "R7", "R8", 0xCA), {}),
         ("BRA", (32,), {"guard": "PT"}),
+        ("S2R", ("R9", "SR_LANEID"), {"guard": "PT"}),
+        ("BSSY", ("B3", 64), {"guard": "PT"}),
+        ("BSYNC", ("B3",), {"guard": "PT"}),
+        ("BREAK", ("B3",), {"guard": "PT"}),
+        ("YIELD", (), {"guard": "PT"}),
+        ("ELECT", ("P2", 0x0000FFFF), {"guard": "PT"}),
+        ("VOTE", ("P2", "P1", 0x0000FFFF), {"mode": "all", "guard": "PT"}),
+        ("VOTE", ("P2", "P1", 0x0000FFFF, "R7"), {"mode": "ballot", "guard": "PT"}),
         ("EXIT", (), {}),
     ]
 
     for mnemonic, operands, kwargs in cases:
         encoded = assembler.encode(mnemonic, *operands, **kwargs)
         assert assembler.decode_like_ir(encoded.word) == encoded.ir
-        assert encoded.ir["name"] in {"IADD3", "ISETP", "LOP3", "BRA", "EXIT"}
+        assert encoded.ir["name"] in {
+            "IADD3",
+            "ISETP",
+            "LOP3",
+            "BRA",
+            "S2R",
+            "BSSY",
+            "BSYNC",
+            "BREAK",
+            "YIELD",
+            "ELECT",
+            "VOTE",
+            "EXIT",
+        }
+
+
+def test_barrier_roundtrip_preserves_symbolic_operand() -> None:
+    encoded = assembler.encode("BSSY", "B3", 64)
+
+    assert encoded.ir["name"] == "BSSY"
+    assert encoded.ir["operands"]["bar"] == "B3"
+    assert encoded.ir["operands"]["target"] == 64
+
+
+def test_s2r_roundtrip_preserves_laneid_selector() -> None:
+    encoded = assembler.encode("S2R", "R3", "SR_LANEID", guard="P0", guard_neg=True)
+
+    assert encoded.ir["name"] == "S2R"
+    assert encoded.ir["operands"] == {"rd": "R3", "sr": "SR_LANEID"}
+    assert encoded.ir["guard"] == {"predicate": "P0", "negated": True}
+    assert assembler.decode_like_ir(encoded.word) == encoded.ir
 
 
 def test_reproducible_boundary_matrix_roundtrips() -> None:
@@ -64,6 +102,21 @@ def test_reproducible_boundary_matrix_roundtrips() -> None:
         ("LOP3", ("R254", "R254", "RZ", "R0", 0xFF), {"guard": "P6"}),
         ("BRA", (0,), {"guard": "PT"}),
         ("BRA", (16,), {"guard": "P0", "guard_neg": True}),
+        ("S2R", ("RZ", "SR_LANEID"), {"guard": "PT"}),
+        ("S2R", ("R0", "SR_LANEID"), {"guard": "P0", "guard_neg": True}),
+        ("S2R", ("R127", "SR_LANEID"), {"guard": "P3"}),
+        ("S2R", ("R254", "SR_LANEID"), {"guard": "P6"}),
+        ("BSSY", ("B0", 0), {"guard": "PT"}),
+        ("BSSY", ("B15", 16), {"guard": "P0", "guard_neg": True}),
+        ("BSYNC", ("B0",), {"guard": "PT"}),
+        ("BSYNC", ("B15",), {"guard": "P6"}),
+        ("BREAK", ("B0",), {"guard": "PT"}),
+        ("BREAK", ("B15",), {"guard": "P6"}),
+        ("YIELD", (), {"guard": "PT"}),
+        ("ELECT", ("P0", 0), {"guard": "PT"}),
+        ("ELECT", ("P6", 0xFFFFFFFF), {"guard": "P0", "guard_neg": True}),
+        ("VOTE", ("P0", "PT", 0), {"mode": "any", "guard": "PT"}),
+        ("VOTE", ("P6", "P0", 0xFFFFFFFF, "R254"), {"mode": "ballot", "guard": "P6"}),
         ("EXIT", (), {"guard": "PT"}),
         ("EXIT", (), {"guard": "P6", "guard_neg": True}),
     ]
@@ -94,6 +147,12 @@ def test_schema_driven_boundary_matrix_roundtrips() -> None:
                 candidates = register_values
             elif operand.kind == "predicate":
                 candidates = predicate_values[:-1]
+            elif operand.kind == "sreg":
+                candidates = ["SR_LANEID", 0]
+            elif operand.kind == "barrier":
+                candidates = ["B0", "B15", 0, 15]
+            elif operand.kind == "membermask":
+                candidates = _membermask_candidates(field)
             elif operand.kind == "immediate":
                 candidates = _immediate_candidates(field, operand.constraints.get("aligned"))
             else:
@@ -151,6 +210,45 @@ def test_branch_alignment_is_rejected() -> None:
         assembler.encode("BRA", 12)
 
 
+def test_bssy_alignment_is_rejected() -> None:
+    with pytest.raises(assembler.AssembleError, match="aligned"):
+        assembler.encode("BSSY", "B0", 12)
+
+
+def test_barrier_index_is_rejected() -> None:
+    with pytest.raises(assembler.AssembleError, match="barrier"):
+        assembler.encode("BSYNC", "B16")
+
+
+def test_membermask_width_is_rejected() -> None:
+    with pytest.raises(assembler.AssembleError, match="outside range"):
+        assembler.encode("ELECT", "P0", 1 << 32)
+
+
+def test_s2r_unknown_selector_is_rejected() -> None:
+    with pytest.raises(assembler.AssembleError, match="invalid special register"):
+        assembler.encode("S2R", "R0", "SR_TID_X")
+
+
+def test_s2r_predicate_as_destination_is_rejected() -> None:
+    with pytest.raises(assembler.AssembleError, match="invalid register"):
+        assembler.encode("S2R", "P0", "SR_LANEID")
+
+
+def test_s2r_selector_reserved_values_are_rejected_on_decode() -> None:
+    word = assembler.emit("S2R", "R0", "SR_LANEID") | (1 << 20)
+
+    with pytest.raises(assembler.AssembleError, match="special register"):
+        assembler.decode_like_ir(word)
+
+
+def test_s2r_reserved_bits_are_rejected_on_decode() -> None:
+    word = assembler.emit("S2R", "R0", "SR_LANEID") | (1 << 28)
+
+    with pytest.raises(assembler.AssembleError, match="reserved field"):
+        assembler.decode_like_ir(word)
+
+
 def test_reserved_bits_are_rejected_on_decode() -> None:
     word = assembler.emit("EXIT") | (1 << 12)
 
@@ -204,11 +302,21 @@ def _immediate_candidates(field: schema.FieldSchema, aligned) -> list[int]:
     return list(dict.fromkeys(candidates))
 
 
+def _membermask_candidates(field: schema.FieldSchema) -> list[int]:
+    return [0, (1 << field.width) - 1, 1, 0x80000000]
+
+
 def _default_operand(operand: schema.OperandSchema, field: schema.FieldSchema):
     if operand.kind == "register":
         return "R0"
     if operand.kind == "predicate":
         return "P0"
+    if operand.kind == "sreg":
+        return "SR_LANEID"
+    if operand.kind == "barrier":
+        return "B0"
+    if operand.kind == "membermask":
+        return 1
     if operand.kind == "immediate":
         aligned = operand.constraints.get("aligned")
         if isinstance(aligned, int):

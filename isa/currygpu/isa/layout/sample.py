@@ -150,6 +150,118 @@ SAMPLE_LAYOUT = Layout(
             reserved=(ReservedLayout("bra_reserved", 36, 71),),
         ),
         InstructionLayout(
+            name="S2R",
+            opcode=0x49,
+            opcode_lsb=0,
+            opcode_width=8,
+            fields=MappingProxyType(
+                {
+                    "guard_pred": FieldLayout(8, 3),
+                    "guard_neg": FieldLayout(11, 1),
+                    "rd": FieldLayout(12, 8),
+                    "sr": FieldLayout(20, 8),
+                }
+            ),
+            reserved=(ReservedLayout("s2r_reserved", 28, 79),),
+        ),
+        InstructionLayout(
+            name="BSSY",
+            opcode=0x41,
+            opcode_lsb=0,
+            opcode_width=8,
+            fields=MappingProxyType(
+                {
+                    "guard_pred": FieldLayout(8, 3),
+                    "guard_neg": FieldLayout(11, 1),
+                    "bar": FieldLayout(12, 4),
+                    "target": FieldLayout(16, 24),
+                }
+            ),
+            reserved=(ReservedLayout("bssy_reserved", 40, 67),),
+        ),
+        InstructionLayout(
+            name="BSYNC",
+            opcode=0x42,
+            opcode_lsb=0,
+            opcode_width=8,
+            fields=MappingProxyType(
+                {
+                    "guard_pred": FieldLayout(8, 3),
+                    "guard_neg": FieldLayout(11, 1),
+                    "bar": FieldLayout(12, 4),
+                }
+            ),
+            reserved=(ReservedLayout("bsync_reserved", 16, 91),),
+        ),
+        InstructionLayout(
+            name="BREAK",
+            opcode=0x46,
+            opcode_lsb=0,
+            opcode_width=8,
+            fields=MappingProxyType(
+                {
+                    "guard_pred": FieldLayout(8, 3),
+                    "guard_neg": FieldLayout(11, 1),
+                    "bar": FieldLayout(12, 4),
+                }
+            ),
+            reserved=(ReservedLayout("break_reserved", 16, 91),),
+        ),
+        InstructionLayout(
+            name="YIELD",
+            opcode=0x48,
+            opcode_lsb=0,
+            opcode_width=8,
+            fields=MappingProxyType(
+                {
+                    "guard_pred": FieldLayout(8, 3),
+                    "guard_neg": FieldLayout(11, 1),
+                }
+            ),
+            reserved=(ReservedLayout("yield_reserved", 12, 95),),
+        ),
+        InstructionLayout(
+            name="ELECT",
+            opcode=0x4A,
+            opcode_lsb=0,
+            opcode_width=8,
+            fields=MappingProxyType(
+                {
+                    "guard_pred": FieldLayout(8, 3),
+                    "guard_neg": FieldLayout(11, 1),
+                    "pd": FieldLayout(12, 3),
+                    "membermask": FieldLayout(15, 32),
+                }
+            ),
+            reserved=(ReservedLayout("elect_reserved", 47, 60),),
+        ),
+        InstructionLayout(
+            name="VOTE",
+            opcode=0x4B,
+            opcode_lsb=0,
+            opcode_width=8,
+            fields=MappingProxyType(
+                {
+                    "guard_pred": FieldLayout(8, 3),
+                    "guard_neg": FieldLayout(11, 1),
+                    "pd": FieldLayout(12, 3),
+                    "src": FieldLayout(15, 3),
+                    "rd": FieldLayout(18, 8),
+                    "membermask": FieldLayout(26, 32),
+                    "mode": FieldLayout(58, 2),
+                }
+            ),
+            reserved=(ReservedLayout("vote_reserved", 60, 47),),
+            modifiers=MappingProxyType(
+                {
+                    "mode": ModifierLayout(
+                        "mode",
+                        MappingProxyType({"any": 0, "all": 1, "eq": 2, "ballot": 3}),
+                    )
+                }
+            ),
+        ),
+        InstructionLayout(
             name="EXIT",
             opcode=0x7F,
             opcode_lsb=0,

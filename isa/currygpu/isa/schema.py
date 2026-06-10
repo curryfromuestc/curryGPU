@@ -41,6 +41,7 @@ class OperandSchema:
     required: bool = True
     default: int | str | None = None
     constraints: Mapping[str, int | bool] = MappingProxyType({})
+    choices: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -173,6 +174,101 @@ INSTRUCTIONS = (
             ),
         ),
         semantics="bra_uniform",
+    ),
+    InstructionSchema(
+        name="S2R",
+        fields=_base_fields(
+            (
+                FieldSchema("rd", 8, "register"),
+                FieldSchema("sr", 8, "sreg", choices=("SR_LANEID",)),
+            )
+        ),
+        operands=(
+            OperandSchema("rd", "register", "rd"),
+            OperandSchema("sr", "sreg", "sr", choices=("SR_LANEID",)),
+        ),
+        semantics="s2r",
+    ),
+    InstructionSchema(
+        name="BSSY",
+        fields=_base_fields(
+            (
+                FieldSchema("bar", 4, "barrier"),
+                FieldSchema("target", 24, "immediate", signed=True),
+            )
+        ),
+        operands=(
+            OperandSchema("bar", "barrier", "bar"),
+            OperandSchema(
+                "target",
+                "immediate",
+                "target",
+                constraints=MappingProxyType({"aligned": 16}),
+            ),
+        ),
+        semantics="bssy",
+    ),
+    InstructionSchema(
+        name="BSYNC",
+        fields=_base_fields(
+            (
+                FieldSchema("bar", 4, "barrier"),
+            )
+        ),
+        operands=(OperandSchema("bar", "barrier", "bar"),),
+        semantics="bsync",
+    ),
+    InstructionSchema(
+        name="BREAK",
+        fields=_base_fields(
+            (
+                FieldSchema("bar", 4, "barrier"),
+            )
+        ),
+        operands=(OperandSchema("bar", "barrier", "bar"),),
+        semantics="break",
+    ),
+    InstructionSchema(
+        name="YIELD",
+        fields=_base_fields(()),
+        operands=(),
+        semantics="yield",
+    ),
+    InstructionSchema(
+        name="ELECT",
+        fields=_base_fields(
+            (
+                FieldSchema("pd", 3, "predicate"),
+                FieldSchema("membermask", 32, "membermask"),
+            )
+        ),
+        operands=(
+            OperandSchema("pd", "predicate", "pd"),
+            OperandSchema("membermask", "membermask", "membermask"),
+        ),
+        semantics="elect",
+    ),
+    InstructionSchema(
+        name="VOTE",
+        fields=_base_fields(
+            (
+                FieldSchema("pd", 3, "predicate"),
+                FieldSchema("src", 3, "predicate"),
+                FieldSchema("rd", 8, "register", default="RZ"),
+                FieldSchema("membermask", 32, "membermask"),
+                FieldSchema("mode", 2, "modifier", default=0),
+            )
+        ),
+        operands=(
+            OperandSchema("pd", "predicate", "pd"),
+            OperandSchema("src", "predicate", "src"),
+            OperandSchema("membermask", "membermask", "membermask"),
+            OperandSchema("rd", "register", "rd", required=False, default="RZ"),
+        ),
+        modifiers=(
+            ModifierSchema("mode", "mode", ("any", "all", "eq", "ballot"), "any"),
+        ),
+        semantics="vote",
     ),
     InstructionSchema(
         name="EXIT",

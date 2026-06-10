@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -45,6 +46,31 @@ struct Counters {
     std::uint64_t warp_instructions = 0;
     std::uint64_t mem_ops = 0;
     std::uint64_t divergence_events = 0;
+};
+
+enum class SchedOrder {
+    MinPcFirst,
+    MaxPcFirst,
+    RoundRobin,
+    OldestGroupFirst,
+};
+
+struct ExecutionGroup {
+    int pc = 0;
+    std::array<bool, kLanes> lanes{};
+    std::uint64_t seq = 0;
+};
+
+struct Barrier {
+    std::uint32_t participation_mask = 0;
+    int reconv_pc = 0;
+    bool valid = false;
+};
+
+enum class BarrierStatus {
+    Unarmed,
+    Armed,
+    Dissolved,
 };
 
 std::uint64_t g_boundary_calls = 0;
@@ -94,6 +120,64 @@ int reg_index(const py::object& value) {
         }
     }
     throw std::invalid_argument("unsupported register operand");
+}
+
+int barrier_index(const py::object& value) {
+    if (py::isinstance<py::int_>(value)) {
+        return value.cast<int>();
+    }
+    if (py::isinstance<py::str>(value)) {
+        std::string text = upper(value.cast<std::string>());
+        if (text.size() > 1 && text[0] == 'B') {
+            return std::stoi(text.substr(1));
+        }
+    }
+    if (py::isinstance<py::dict>(value)) {
+        py::dict data = value.cast<py::dict>();
+        if (data.contains("index")) {
+            return py::reinterpret_borrow<py::object>(data["index"]).cast<int>();
+        }
+        if (data.contains("name")) {
+            return barrier_index(py::reinterpret_borrow<py::object>(data["name"]));
+        }
+    }
+    throw std::invalid_argument("unsupported barrier operand");
+}
+
+std::string sreg_name(const py::object& value) {
+    if (py::isinstance<py::str>(value)) {
+        return upper(value.cast<std::string>());
+    }
+    if (py::isinstance<py::int_>(value) && value.cast<int>() == 0) {
+        return "SR_LANEID";
+    }
+    if (py::isinstance<py::dict>(value)) {
+        py::dict data = value.cast<py::dict>();
+        if (data.contains("name")) {
+            return sreg_name(py::reinterpret_borrow<py::object>(data["name"]));
+        }
+        if (data.contains("selector")) {
+            return sreg_name(py::reinterpret_borrow<py::object>(data["selector"]));
+        }
+    }
+    throw std::invalid_argument("unsupported special register operand");
+}
+
+SchedOrder parse_sched_order(const std::string& value) {
+    const std::string name = upper(value);
+    if (name == "MIN_PC_FIRST") {
+        return SchedOrder::MinPcFirst;
+    }
+    if (name == "MAX_PC_FIRST") {
+        return SchedOrder::MaxPcFirst;
+    }
+    if (name == "ROUND_ROBIN") {
+        return SchedOrder::RoundRobin;
+    }
+    if (name == "OLDEST_GROUP_FIRST") {
+        return SchedOrder::OldestGroupFirst;
+    }
+    throw std::invalid_argument("unknown scheduling order: " + value);
 }
 
 py::object operand(const Instruction& inst, std::initializer_list<const char*> names, py::object fallback = py::none()) {
@@ -245,6 +329,38 @@ Instruction instruction_from_word(unsigned __int128 word) {
         inst.operands["lut"] = py::int_(fields["lut"]);
     } else if (inst.op == "BRA") {
         inst.operands["target"] = py::int_(fields["target"] / 16);
+    } else if (inst.op == "S2R") {
+        if (fields["sr"] != 0) {
+            inst.decode_ok = false;
+            inst.decode_trap = "sreg";
+            return inst;
+        }
+        inst.operands["rd"] = py::str(reg_name(fields["rd"]));
+        inst.operands["sr"] = py::str("SR_LANEID");
+    } else if (inst.op == "BSSY") {
+        inst.operands["bar"] = py::str("B" + std::to_string(fields["bar"]));
+        inst.operands["target"] = py::int_(fields["target"] / 16);
+    } else if (inst.op == "BSYNC") {
+        inst.operands["bar"] = py::str("B" + std::to_string(fields["bar"]));
+    } else if (inst.op == "BREAK") {
+        inst.operands["bar"] = py::str("B" + std::to_string(fields["bar"]));
+    } else if (inst.op == "ELECT") {
+        inst.operands["pd"] = py::str(pred_symbol(fields["pd"]));
+        inst.operands["membermask"] = py::int_(fields["membermask"]);
+    } else if (inst.op == "VOTE") {
+        static const std::array<const char*, 4> mode_names = {"ANY", "ALL", "EQ", "BALLOT"};
+        std::int64_t mode = fields["mode"];
+        if (mode < 0 || mode >= static_cast<std::int64_t>(mode_names.size())) {
+            inst.decode_ok = false;
+            inst.decode_trap = "modifier";
+            return inst;
+        }
+        inst.operands["pd"] = py::str(pred_symbol(fields["pd"]));
+        inst.operands["src"] = py::str(pred_symbol(fields["src"]));
+        inst.operands["membermask"] = py::int_(fields["membermask"]);
+        inst.operands["rd"] = py::str(reg_name(fields["rd"]));
+        inst.operands["mode"] = py::str(mode_names[mode]);
+    } else if (inst.op == "YIELD") {
     } else if (inst.op != "EXIT") {
         inst.decode_ok = false;
         inst.decode_trap = "unknown";
@@ -262,9 +378,11 @@ std::vector<Instruction> adapt_words(const py::object& words) {
 
 class NativeWarp {
 public:
-    explicit NativeWarp(const py::object& program, int num_gprs = kDefaultGprs)
+    explicit NativeWarp(const py::object& program, int num_gprs = kDefaultGprs, SchedOrder order = SchedOrder::MinPcFirst, bool debug_checks = false)
         : program_(adapt_program(program)),
-          vgpr_(num_gprs, std::array<std::uint32_t, kLanes>{}) {
+          vgpr_(num_gprs, std::array<std::uint32_t, kLanes>{}),
+          order_(order),
+          debug_checks_(debug_checks) {
         for (auto& values : vgpr_) {
             values.fill(0);
         }
@@ -275,11 +393,14 @@ public:
         active_mask_.fill(true);
         pc_.fill(0);
         lane_state_.fill("active");
+        blocked_on_.fill(-1);
     }
 
-    explicit NativeWarp(std::vector<Instruction> program, int num_gprs = kDefaultGprs)
+    explicit NativeWarp(std::vector<Instruction> program, int num_gprs = kDefaultGprs, SchedOrder order = SchedOrder::MinPcFirst, bool debug_checks = false)
         : program_(std::move(program)),
-          vgpr_(num_gprs, std::array<std::uint32_t, kLanes>{}) {
+          vgpr_(num_gprs, std::array<std::uint32_t, kLanes>{}),
+          order_(order),
+          debug_checks_(debug_checks) {
         for (auto& values : vgpr_) {
             values.fill(0);
         }
@@ -290,6 +411,7 @@ public:
         active_mask_.fill(true);
         pc_.fill(0);
         lane_state_.fill("active");
+        blocked_on_.fill(-1);
     }
 
     py::dict step(int max_steps) {
@@ -300,14 +422,26 @@ public:
         int issued = 0;
         while (!done() && trap_.kind == "none") {
             if (issued >= max_steps) {
-                set_trap("max_steps", "budget_exhausted", current_pc_or_zero(), py::dict());
+                set_trap("max_steps", "budget_exhausted", first_runnable_pc_or_zero(), py::dict());
                 break;
             }
-            int pc = current_pc();
-            if (pc < 0) {
-                set_trap("execute", "non_uniform_pc", -1, py::dict());
+            std::vector<ExecutionGroup> groups = build_groups();
+            if (groups.empty()) {
+                try_fire_barriers();
+                groups = build_groups();
+            }
+            if (groups.empty()) {
+                promote_yielded_lanes();
+                groups = build_groups();
+            }
+            if (groups.empty()) {
+                if (has_blocked_lanes()) {
+                    set_convergence_trap("deadlock_no_progress", first_runnable_pc_or_zero(), -1);
+                }
                 break;
             }
+            ExecutionGroup group = select_group(groups);
+            int pc = group.pc;
             if (pc >= static_cast<int>(program_.size())) {
                 set_trap("execute", "illegal_pc", pc, py::dict());
                 break;
@@ -321,17 +455,18 @@ public:
             }
             std::array<bool, kLanes> lane_mask;
             try {
-                lane_mask = guard_mask(inst.guard);
+                lane_mask = guard_mask(inst.guard, group.lanes);
             } catch (const std::exception& exc) {
                 py::dict detail;
                 detail["message"] = exc.what();
                 set_trap("decode", "decode_failure", pc, detail);
                 break;
             }
-            std::array<bool, kLanes> issued_mask = active_mask_;
+            std::array<bool, kLanes> issued_mask = group.lanes;
             counters_.warp_instructions += 1;
             counters_.instructions += static_cast<std::uint64_t>(std::count(lane_mask.begin(), lane_mask.end(), true));
             std::array<int, kLanes> next_pc = fallthrough();
+            issue_pc_ = pc;
             try {
                 if (inst.op == "IADD3") {
                     exec_iadd3(inst, lane_mask);
@@ -341,6 +476,20 @@ public:
                     exec_lop3(inst, lane_mask);
                 } else if (inst.op == "BRA") {
                     next_pc = exec_bra(inst, lane_mask);
+                } else if (inst.op == "S2R") {
+                    exec_s2r(inst, lane_mask);
+                } else if (inst.op == "BSSY") {
+                    exec_bssy(inst, group.lanes);
+                } else if (inst.op == "BSYNC") {
+                    exec_bsync(inst, group.lanes, next_pc);
+                } else if (inst.op == "BREAK") {
+                    exec_break(inst, lane_mask);
+                } else if (inst.op == "YIELD") {
+                    exec_yield(lane_mask);
+                } else if (inst.op == "ELECT") {
+                    exec_elect(inst, lane_mask);
+                } else if (inst.op == "VOTE") {
+                    exec_vote(inst, lane_mask);
                 } else if (inst.op == "EXIT") {
                     exec_exit(lane_mask);
                 } else {
@@ -354,11 +503,15 @@ public:
                 detail["op"] = inst.op;
                 set_trap("decode", "decode_failure", pc, detail);
             }
+            issue_pc_ = -1;
             if (trap_.kind != "none") {
                 break;
             }
+            if (splits_active_pc(issued_mask, next_pc)) {
+                counters_.divergence_events += 1;
+            }
             for (int lane = 0; lane < kLanes; ++lane) {
-                if (issued_mask[lane]) {
+                if (issued_mask[lane] && lane_state_[lane] != "blocked") {
                     pc_[lane] = next_pc[lane];
                 }
             }
@@ -430,9 +583,9 @@ public:
         py::list barriers;
         for (int index = 0; index < 16; ++index) {
             py::dict barrier;
-            barrier["participation_mask"] = 0;
-            barrier["reconv_pc"] = 0;
-            barrier["valid"] = false;
+            barrier["participation_mask"] = bx_[index].participation_mask;
+            barrier["reconv_pc"] = bx_[index].reconv_pc;
+            barrier["valid"] = bx_[index].valid;
             barriers.append(barrier);
         }
         py::dict bx;
@@ -446,27 +599,108 @@ private:
         return std::none_of(active_mask_.begin(), active_mask_.end(), [](bool active) { return active; });
     }
 
-    int current_pc() const {
-        int value = -1;
+    bool has_blocked_lanes() const {
         for (int lane = 0; lane < kLanes; ++lane) {
-            if (!active_mask_[lane]) {
-                continue;
-            }
-            if (value < 0) {
-                value = pc_[lane];
-            } else if (value != pc_[lane]) {
-                return -1;
+            if (active_mask_[lane] && lane_state_[lane] == "blocked") {
+                return true;
             }
         }
-        return value < 0 ? 0 : value;
+        return false;
     }
 
-    int current_pc_or_zero() const {
-        int pc = current_pc();
-        return pc < 0 ? 0 : pc;
+    void promote_yielded_lanes() {
+        for (int lane = 0; lane < kLanes; ++lane) {
+            if (active_mask_[lane] && lane_state_[lane] == "yielded") {
+                lane_state_[lane] = "active";
+            }
+        }
     }
 
-    std::array<bool, kLanes> guard_mask(const Guard& guard) const {
+    std::vector<ExecutionGroup> build_groups() {
+        std::map<int, std::array<bool, kLanes>> lanes_by_pc;
+        for (int lane = 0; lane < kLanes; ++lane) {
+            if (!active_mask_[lane] || lane_state_[lane] != "active") {
+                continue;
+            }
+            auto [iter, inserted] = lanes_by_pc.emplace(pc_[lane], std::array<bool, kLanes>{});
+            if (inserted) {
+                iter->second.fill(false);
+            }
+            iter->second[lane] = true;
+        }
+        std::set<int> live_pcs;
+        for (const auto& [pc, _] : lanes_by_pc) {
+            live_pcs.insert(pc);
+            if (!group_seq_.contains(pc)) {
+                group_seq_[pc] = next_group_seq_++;
+            }
+        }
+        for (auto iter = group_seq_.begin(); iter != group_seq_.end();) {
+            if (live_pcs.contains(iter->first)) {
+                ++iter;
+            } else {
+                iter = group_seq_.erase(iter);
+            }
+        }
+        std::vector<ExecutionGroup> groups;
+        for (const auto& [pc, lanes] : lanes_by_pc) {
+            groups.push_back(ExecutionGroup{pc, lanes, group_seq_[pc]});
+        }
+        return groups;
+    }
+
+    ExecutionGroup select_group(const std::vector<ExecutionGroup>& groups) {
+        if (groups.empty()) {
+            return ExecutionGroup{};
+        }
+        if (order_ == SchedOrder::MaxPcFirst) {
+            return groups.back();
+        }
+        if (order_ == SchedOrder::RoundRobin) {
+            auto iter = std::find_if(groups.begin(), groups.end(), [this](const ExecutionGroup& group) {
+                return group.pc >= round_robin_cursor_;
+            });
+            if (iter == groups.end()) {
+                iter = groups.begin();
+            }
+            round_robin_cursor_ = iter->pc + 1;
+            return *iter;
+        }
+        if (order_ == SchedOrder::OldestGroupFirst) {
+            return *std::min_element(groups.begin(), groups.end(), [](const ExecutionGroup& left, const ExecutionGroup& right) {
+                if (left.seq != right.seq) {
+                    return left.seq < right.seq;
+                }
+                return left.pc < right.pc;
+            });
+        }
+        return groups.front();
+    }
+
+    int first_runnable_pc_or_zero() const {
+        int value = 0;
+        bool found = false;
+        for (int lane = 0; lane < kLanes; ++lane) {
+            if (!active_mask_[lane] || lane_state_[lane] != "active") {
+                continue;
+            }
+            if (!found || pc_[lane] < value) {
+                value = pc_[lane];
+                found = true;
+            }
+        }
+        return value;
+    }
+
+    int trap_pc_or_zero() const {
+        return issue_pc_ >= 0 ? issue_pc_ : first_runnable_pc_or_zero();
+    }
+
+    bool is_default_guard(const Guard& guard) const {
+        return guard.pred == "PT" && !guard.negate;
+    }
+
+    std::array<bool, kLanes> guard_mask(const Guard& guard, const std::array<bool, kLanes>& group) const {
         auto iter = predicates_.find(guard.pred);
         if (iter == predicates_.end()) {
             throw std::invalid_argument("invalid predicate: " + guard.pred);
@@ -474,7 +708,7 @@ private:
         std::array<bool, kLanes> result{};
         for (int lane = 0; lane < kLanes; ++lane) {
             bool pred = iter->second[lane];
-            result[lane] = active_mask_[lane] && (guard.negate ? !pred : pred);
+            result[lane] = group[lane] && (guard.negate ? !pred : pred);
         }
         return result;
     }
@@ -503,6 +737,13 @@ private:
                 }
                 return vgpr_[reg][lane];
             }
+        }
+        if (!py::isinstance<py::str>(value) && py::isinstance<py::sequence>(value)) {
+            py::sequence values = value.cast<py::sequence>();
+            if (values.size() != kLanes) {
+                throw std::invalid_argument("per-lane operand must have 32 values");
+            }
+            return static_cast<std::uint32_t>(py::reinterpret_borrow<py::object>(values[lane]).cast<std::int64_t>());
         }
         throw std::invalid_argument("unsupported operand");
     }
@@ -570,7 +811,7 @@ private:
         if (lut < 0 || lut > 0xFF) {
             py::dict detail;
             detail["lut"] = lut;
-            set_trap("decode", "invalid_lop3_lut", current_pc_or_zero(), detail);
+            set_trap("decode", "invalid_lop3_lut", trap_pc_or_zero(), detail);
             return;
         }
         for (int lane = 0; lane < kLanes; ++lane) {
@@ -594,7 +835,7 @@ private:
         if (target < 0 || target >= static_cast<int>(program_.size())) {
             py::dict detail;
             detail["target"] = target;
-            set_trap("execute", "illegal_branch_target", current_pc_or_zero(), detail);
+            set_trap("execute", "illegal_branch_target", trap_pc_or_zero(), detail);
             return fallthrough();
         }
         std::array<int, kLanes> next = fallthrough();
@@ -603,19 +844,333 @@ private:
                 next[lane] = target;
             }
         }
+        return next;
+    }
+
+    void exec_s2r(const Instruction& inst, const std::array<bool, kLanes>& mask) {
+        std::string selector = sreg_name(operand(inst, {"sr", "sreg"}));
+        if (selector != "SR_LANEID") {
+            throw std::invalid_argument("unsupported special register selector");
+        }
+        py::object dst = operand(inst, {"dst", "rd"});
+        for (int lane = 0; lane < kLanes; ++lane) {
+            if (mask[lane]) {
+                write_gpr(dst, lane, static_cast<std::uint32_t>(lane));
+            }
+        }
+    }
+
+    void exec_bssy(const Instruction& inst, const std::array<bool, kLanes>& group_mask) {
+        if (!is_default_guard(inst.guard)) {
+            set_convergence_trap("predicated_barrier_unsupported", trap_pc_or_zero(), -1);
+            return;
+        }
+        int index = barrier_index(operand(inst, {"bar", "barrier"}));
+        if (index < 0 || index >= static_cast<int>(bx_.size())) {
+            set_convergence_trap("barrier_slots_exhausted", trap_pc_or_zero(), index);
+            return;
+        }
+        int target = operand(inst, {"target", "pc"}).cast<int>();
+        if (target < 0 || target >= static_cast<int>(program_.size())) {
+            py::dict detail = convergence_detail("illegal_reconv_pc", trap_pc_or_zero(), index);
+            detail["target"] = target;
+            set_trap("convergence", "illegal_reconv_pc", trap_pc_or_zero(), detail);
+            return;
+        }
+        if (barrier_status_[index] == BarrierStatus::Armed) {
+            set_convergence_trap("bssy_clobbers_live_barrier", trap_pc_or_zero(), index);
+            return;
+        }
+        bx_[index].participation_mask = lane_mask_bits(group_mask);
+        bx_[index].reconv_pc = target;
+        bx_[index].valid = true;
+        barrier_status_[index] = BarrierStatus::Armed;
+    }
+
+    void exec_bsync(const Instruction& inst, const std::array<bool, kLanes>& group_mask, std::array<int, kLanes>& next_pc) {
+        if (!is_default_guard(inst.guard)) {
+            set_convergence_trap("predicated_barrier_unsupported", trap_pc_or_zero(), -1);
+            return;
+        }
+        int index = barrier_index(operand(inst, {"bar", "barrier"}));
+        if (index < 0 || index >= static_cast<int>(bx_.size()) || barrier_status_[index] == BarrierStatus::Unarmed) {
+            set_convergence_trap("bsync_invalid_barrier", trap_pc_or_zero(), index);
+            return;
+        }
+        if (barrier_status_[index] == BarrierStatus::Dissolved) {
+            return;
+        }
+        for (int lane = 0; lane < kLanes; ++lane) {
+            if (group_mask[lane]) {
+                lane_state_[lane] = "blocked";
+                blocked_on_[lane] = index;
+            }
+        }
+        try_fire_barrier(index, &next_pc);
+    }
+
+    void exec_break(const Instruction& inst, const std::array<bool, kLanes>& mask) {
+        int index = barrier_index(operand(inst, {"bar", "barrier"}));
+        if (index < 0 || index >= static_cast<int>(bx_.size())) {
+            set_convergence_trap("bsync_invalid_barrier", trap_pc_or_zero(), index);
+            return;
+        }
+        if (barrier_status_[index] != BarrierStatus::Armed) {
+            return;
+        }
+        for (int lane = 0; lane < kLanes; ++lane) {
+            if (mask[lane]) {
+                bx_[index].participation_mask &= ~(std::uint32_t{1} << lane);
+            }
+        }
+        if (bx_[index].participation_mask == 0) {
+            dissolve_barrier(index);
+        }
+    }
+
+    void exec_yield(const std::array<bool, kLanes>& mask) {
+        for (int lane = 0; lane < kLanes; ++lane) {
+            if (mask[lane]) {
+                lane_state_[lane] = "yielded";
+                blocked_on_[lane] = -1;
+            }
+        }
+    }
+
+    void exec_elect(const Instruction& inst, const std::array<bool, kLanes>& participant_mask) {
+        const std::uint32_t membermask = read_membermask(inst);
+        if (!validate_membermask(membermask, participant_mask)) {
+            return;
+        }
+        const int leader = first_member_lane(membermask);
+        if (leader < 0) {
+            set_convergence_trap("elect_not_unique", trap_pc_or_zero(), -1);
+            return;
+        }
+        std::string dst = pred_name(operand(inst, {"dst", "dst_pred", "pd"}));
+        if (dst == "PT" || !is_predicate_name(dst)) {
+            throw std::invalid_argument("invalid predicate destination");
+        }
+        int true_count = 0;
+        for (int lane = 0; lane < kLanes; ++lane) {
+            if ((membermask & (std::uint32_t{1} << lane)) == 0 || !participant_mask[lane]) {
+                continue;
+            }
+            const bool elected = lane == leader;
+            predicates_[dst][lane] = elected;
+            if (elected) {
+                true_count += 1;
+            }
+        }
+        if (true_count != 1) {
+            set_convergence_trap("elect_not_unique", trap_pc_or_zero(), -1);
+        }
+    }
+
+    void exec_vote(const Instruction& inst, const std::array<bool, kLanes>& participant_mask) {
+        const std::uint32_t membermask = read_membermask(inst);
+        if (!validate_membermask(membermask, participant_mask)) {
+            return;
+        }
+        std::string dst = pred_name(operand(inst, {"dst", "dst_pred", "pd"}));
+        if (dst == "PT" || !is_predicate_name(dst)) {
+            throw std::invalid_argument("invalid predicate destination");
+        }
+        std::string src = pred_name(operand(inst, {"src", "src_pred", "psrc"}));
+        auto src_iter = predicates_.find(src);
+        if (src_iter == predicates_.end()) {
+            throw std::invalid_argument("invalid predicate source");
+        }
+        std::string mode = upper(operand(inst, {"mode"}, py::str("ANY")).cast<std::string>());
+        bool result = false;
+        if (mode == "ANY" || mode == "BALLOT") {
+            result = false;
+            for (int lane = 0; lane < kLanes; ++lane) {
+                if ((membermask & (std::uint32_t{1} << lane)) != 0 && participant_mask[lane]) {
+                    result = result || src_iter->second[lane];
+                }
+            }
+        } else if (mode == "ALL") {
+            result = true;
+            for (int lane = 0; lane < kLanes; ++lane) {
+                if ((membermask & (std::uint32_t{1} << lane)) != 0 && participant_mask[lane]) {
+                    result = result && src_iter->second[lane];
+                }
+            }
+        } else if (mode == "EQ") {
+            int first_lane = first_member_lane(membermask);
+            bool first = src_iter->second[first_lane];
+            result = true;
+            for (int lane = 0; lane < kLanes; ++lane) {
+                if ((membermask & (std::uint32_t{1} << lane)) != 0 && participant_mask[lane]) {
+                    result = result && (src_iter->second[lane] == first);
+                }
+            }
+        } else {
+            throw std::invalid_argument("unsupported vote mode");
+        }
+        std::uint32_t ballot = 0;
+        for (int lane = 0; lane < kLanes; ++lane) {
+            if ((membermask & (std::uint32_t{1} << lane)) == 0 || !participant_mask[lane]) {
+                continue;
+            }
+            predicates_[dst][lane] = result;
+            if (src_iter->second[lane]) {
+                ballot |= std::uint32_t{1} << lane;
+            }
+        }
+        if (mode == "BALLOT") {
+            py::object dst_reg = operand(inst, {"rd", "dst_reg"}, py::str("RZ"));
+            for (int lane = 0; lane < kLanes; ++lane) {
+                if ((membermask & (std::uint32_t{1} << lane)) != 0 && participant_mask[lane]) {
+                    write_gpr(dst_reg, lane, ballot);
+                }
+            }
+        }
+    }
+
+    bool splits_active_pc(const std::array<bool, kLanes>& issued_mask, const std::array<int, kLanes>& next_pc) const {
         int seen = -1;
         for (int lane = 0; lane < kLanes; ++lane) {
-            if (!active_mask_[lane]) {
+            if (!issued_mask[lane] || !active_mask_[lane] || lane_state_[lane] != "active") {
                 continue;
             }
             if (seen < 0) {
-                seen = next[lane];
-            } else if (seen != next[lane]) {
-                set_trap("execute", "non_uniform_branch", current_pc_or_zero(), py::dict());
-                break;
+                seen = next_pc[lane];
+            } else if (seen != next_pc[lane]) {
+                return true;
             }
         }
-        return next;
+        return false;
+    }
+
+    std::uint32_t lane_mask_bits(const std::array<bool, kLanes>& mask) const {
+        std::uint32_t bits = 0;
+        for (int lane = 0; lane < kLanes; ++lane) {
+            if (mask[lane]) {
+                bits |= std::uint32_t{1} << lane;
+            }
+        }
+        return bits;
+    }
+
+    std::uint32_t read_membermask(const Instruction& inst) const {
+        py::object value = operand(inst, {"membermask", "mask"});
+        if (!py::isinstance<py::int_>(value)) {
+            throw std::invalid_argument("membermask must be an integer");
+        }
+        std::int64_t parsed = value.cast<std::int64_t>();
+        if (parsed < 0 || parsed > static_cast<std::int64_t>(kMask32)) {
+            throw std::invalid_argument("membermask out of range");
+        }
+        return static_cast<std::uint32_t>(parsed);
+    }
+
+    int first_member_lane(std::uint32_t membermask) const {
+        for (int lane = 0; lane < kLanes; ++lane) {
+            if ((membermask & (std::uint32_t{1} << lane)) != 0) {
+                return lane;
+            }
+        }
+        return -1;
+    }
+
+    bool validate_membermask(std::uint32_t membermask, const std::array<bool, kLanes>& participant_mask) {
+        if (membermask == 0) {
+            set_convergence_trap("self_not_in_membermask", trap_pc_or_zero(), -1);
+            return false;
+        }
+        const std::uint32_t participants = lane_mask_bits(participant_mask);
+        if ((membermask & ~participants) != 0) {
+            py::dict detail = convergence_detail("membermask_not_subset", trap_pc_or_zero(), -1);
+            detail["membermask"] = membermask;
+            detail["participant_mask"] = participants;
+            set_trap("convergence", "membermask_not_subset", trap_pc_or_zero(), detail);
+            return false;
+        }
+        return true;
+    }
+
+    void dissolve_barrier(int index) {
+        bx_[index].participation_mask = 0;
+        bx_[index].reconv_pc = 0;
+        bx_[index].valid = false;
+        barrier_status_[index] = BarrierStatus::Dissolved;
+    }
+
+    void reset_barrier(int index) {
+        bx_[index].participation_mask = 0;
+        bx_[index].reconv_pc = 0;
+        bx_[index].valid = false;
+        barrier_status_[index] = BarrierStatus::Unarmed;
+    }
+
+    bool barrier_ready(int index) const {
+        const std::uint32_t participation = bx_[index].participation_mask;
+        if (participation == 0) {
+            return true;
+        }
+        for (int lane = 0; lane < kLanes; ++lane) {
+            if ((participation & (std::uint32_t{1} << lane)) == 0) {
+                continue;
+            }
+            const bool lane_blocked_here = active_mask_[lane] && lane_state_[lane] == "blocked" && blocked_on_[lane] == index;
+            const bool lane_exited = !active_mask_[lane] || lane_state_[lane] == "exited";
+            if (!lane_blocked_here && !lane_exited) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool try_fire_barriers() {
+        bool fired = false;
+        for (int index = 0; index < static_cast<int>(bx_.size()); ++index) {
+            fired = try_fire_barrier(index, nullptr) || fired;
+        }
+        return fired;
+    }
+
+    bool try_fire_barrier(int index, std::array<int, kLanes>* next_pc) {
+        if (barrier_status_[index] != BarrierStatus::Armed || !barrier_ready(index)) {
+            return false;
+        }
+        const std::uint32_t participation = bx_[index].participation_mask;
+        const std::uint32_t expected_resume = blocked_member_mask(index, participation);
+        const int reconv_pc = bx_[index].reconv_pc;
+        const int resume_pc = reconv_pc + 1;
+        std::uint32_t resumed = 0;
+        for (int lane = 0; lane < kLanes; ++lane) {
+            if ((participation & (std::uint32_t{1} << lane)) == 0 || blocked_on_[lane] != index) {
+                continue;
+            }
+            resumed |= std::uint32_t{1} << lane;
+            lane_state_[lane] = "active";
+            blocked_on_[lane] = -1;
+            pc_[lane] = resume_pc;
+            if (next_pc != nullptr) {
+                (*next_pc)[lane] = resume_pc;
+            }
+        }
+        if (debug_checks_ && resumed != expected_resume) {
+            py::dict detail = convergence_detail("debug_bsync_resume_mismatch", trap_pc_or_zero(), index);
+            detail["expected_mask"] = expected_resume;
+            detail["resumed_mask"] = resumed;
+            set_trap("convergence", "debug_bsync_resume_mismatch", trap_pc_or_zero(), detail);
+            return false;
+        }
+        reset_barrier(index);
+        return true;
+    }
+
+    std::uint32_t blocked_member_mask(int index, std::uint32_t participation) const {
+        std::uint32_t mask = 0;
+        for (int lane = 0; lane < kLanes; ++lane) {
+            if ((participation & (std::uint32_t{1} << lane)) != 0 && blocked_on_[lane] == index) {
+                mask |= std::uint32_t{1} << lane;
+            }
+        }
+        return mask;
     }
 
     void exec_exit(const std::array<bool, kLanes>& mask) {
@@ -623,8 +1178,18 @@ private:
             if (mask[lane]) {
                 active_mask_[lane] = false;
                 lane_state_[lane] = "exited";
+                blocked_on_[lane] = -1;
+                for (int index = 0; index < static_cast<int>(bx_.size()); ++index) {
+                    if (barrier_status_[index] == BarrierStatus::Armed) {
+                        bx_[index].participation_mask &= ~(std::uint32_t{1} << lane);
+                        if (bx_[index].participation_mask == 0) {
+                            dissolve_barrier(index);
+                        }
+                    }
+                }
             }
         }
+        try_fire_barriers();
     }
 
     void set_trap(std::string kind, std::string reason, int pc, py::dict detail) {
@@ -634,12 +1199,35 @@ private:
         trap_.detail = std::move(detail);
     }
 
+    py::dict convergence_detail(const std::string& reason, int pc, int barrier_index) const {
+        py::dict detail;
+        detail["trap_reason"] = reason;
+        detail["pc"] = pc;
+        if (barrier_index >= 0) {
+            detail["barrier_index"] = barrier_index;
+        }
+        return detail;
+    }
+
+    void set_convergence_trap(const std::string& reason, int pc, int barrier_index) {
+        set_trap("convergence", reason, pc, convergence_detail(reason, pc, barrier_index));
+    }
+
     std::vector<Instruction> program_;
     std::vector<std::array<std::uint32_t, kLanes>> vgpr_;
     std::map<std::string, std::array<bool, kLanes>> predicates_;
     std::array<bool, kLanes> active_mask_{};
     std::array<int, kLanes> pc_{};
     std::array<std::string, kLanes> lane_state_{};
+    std::array<Barrier, 16> bx_{};
+    std::array<int, kLanes> blocked_on_{};
+    std::array<BarrierStatus, 16> barrier_status_{};
+    SchedOrder order_ = SchedOrder::MinPcFirst;
+    bool debug_checks_ = false;
+    int issue_pc_ = -1;
+    int round_robin_cursor_ = 0;
+    std::uint64_t next_group_seq_ = 0;
+    std::map<int, std::uint64_t> group_seq_;
     Counters counters_;
     Trap trap_;
 };
@@ -711,14 +1299,14 @@ PYBIND11_MODULE(_native, module) {
         .def("step", &NativeWarp::step)
         .def("snapshot", &NativeWarp::snapshot);
 
-    module.def("launch", [](const py::object& program, int num_gprs) {
+    module.def("launch", [](const py::object& program, int num_gprs, const std::string& sched_order, bool debug_checks) {
         ++g_boundary_calls;
-        return NativeWarp(program, num_gprs);
-    }, py::arg("program"), py::arg("num_gprs") = kDefaultGprs);
-    module.def("launch_words", [](const py::object& words, int num_gprs) {
+        return NativeWarp(program, num_gprs, parse_sched_order(sched_order), debug_checks);
+    }, py::arg("program"), py::arg("num_gprs") = kDefaultGprs, py::arg("sched_order") = "min_pc_first", py::arg("debug_checks") = false);
+    module.def("launch_words", [](const py::object& words, int num_gprs, const std::string& sched_order, bool debug_checks) {
         ++g_boundary_calls;
-        return NativeWarp(adapt_words(words), num_gprs);
-    }, py::arg("words"), py::arg("num_gprs") = kDefaultGprs);
+        return NativeWarp(adapt_words(words), num_gprs, parse_sched_order(sched_order), debug_checks);
+    }, py::arg("words"), py::arg("num_gprs") = kDefaultGprs, py::arg("sched_order") = "min_pc_first", py::arg("debug_checks") = false);
     module.def("step", [](NativeWarp& warp, int max_steps) {
         return warp.step(max_steps);
     });

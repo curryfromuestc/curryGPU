@@ -21,12 +21,12 @@ def _require_native():
     return _native
 
 
-def launch(program, *, num_gprs: int = 256):
-    return _require_native().launch(program, num_gprs)
+def launch(program, *, num_gprs: int = 256, sched_order: str = "min_pc_first", debug_checks: bool = False):
+    return _require_native().launch(program, num_gprs, sched_order, debug_checks)
 
 
-def launch_words(words, *, num_gprs: int = 256):
-    return _require_native().launch_words(words, num_gprs)
+def launch_words(words, *, num_gprs: int = 256, sched_order: str = "min_pc_first", debug_checks: bool = False):
+    return _require_native().launch_words(words, num_gprs, sched_order, debug_checks)
 
 
 def step(warp, max_steps: int):
